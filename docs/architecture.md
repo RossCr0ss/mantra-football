@@ -110,6 +110,37 @@ The Zustand store (`squadStore.ts`) is used only during the **squad builder** fl
 | `/league/[id]/fixtures` | Full client | Odds fetched lazily per match on user action |
 | `/league/[id]/tour` | Full client | Complex scoring state; odds needed after initial load |
 
+## UI conventions
+
+### Team logo URLs
+
+Every `SquadPlayer` and `PlayerAnalytics` has a `teamId`. Team emblem images are derived on the fly — no extra field needed:
+
+```typescript
+`https://images.fotmob.com/image_resources/logo/teamlogo/${teamId}.png`
+```
+
+All player-facing cards and rows display the team emblem next to the team name. The pattern used everywhere:
+
+```tsx
+<div className="relative h-3.5 w-3.5 shrink-0">
+  <Image src={`https://images.fotmob.com/image_resources/logo/teamlogo/${player.teamId}.png`}
+         alt="" fill className="object-contain" unoptimized />
+</div>
+```
+
+On the pitch view (tour page) the emblem appears as a small badge overlaid on the bottom-right of the player avatar, inside a `relative` wrapper around the avatar `div`.
+
+### Pitch view sizing
+
+The tactics view in `tour/page.tsx` uses `max-w-sm sm:max-w-xl md:max-w-2xl` so the pitch scales up on wider screens while staying readable on mobile. Player token sizes are:
+- GK avatar: `h-12 w-12`
+- Outfield avatar: `h-11 w-11`
+- Score chip: `text-[9px]`
+- Name pill: `text-[9px]`, `max-w-[80px]`
+
+---
+
 ## MongoDB collections
 
 | Collection | Key | Purpose |

@@ -53,6 +53,17 @@ If the stat should influence auto-select, update `calcScore()` in `apps/web/src/
 
 ---
 
+## Displaying a player in a new component
+
+When building any UI that lists players, follow these conventions:
+
+- **Team emblem**: derive from `teamId` — `https://images.fotmob.com/image_resources/logo/teamlogo/${teamId}.png`. Use a `relative h-3.5 w-3.5` wrapper with `<Image fill>`. Never store the logo URL; always compute it.
+- **Player photo**: use `player.imageUrl` (already stored on `SquadPlayer`).
+- **Status badges**: check `lineupStatus === 'injured'` (red `INJ`) and `lineupStatus === 'suspended'` (orange `SUS`).
+- **Score badge**: use `scoreTier(score)` for colour classes; display with `.toFixed(1)` for decimal precision.
+
+---
+
 ## Adding a new API route
 
 1. Create `apps/web/src/app/api/{path}/route.ts`

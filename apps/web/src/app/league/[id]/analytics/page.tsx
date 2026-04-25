@@ -5,7 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { LEAGUES } from '@/lib/fotmob';
-import type { PlayerRecentMatch } from '@/lib/fotmob';
+import type { PlayerRecentMatch, PlayerRichStats, PlayerStatItem } from '@/lib/fotmob';
 import { MANTRA_POSITIONS } from '@/lib/mantraPositions';
 import Breadcrumbs from '@/components/Breadcrumbs';
 import LeagueNav from '@/components/LeagueNav';
@@ -69,6 +69,13 @@ const POS_BADGE: Record<string, string> = {
   DEF: 'bg-sky-900/60 text-sky-400',
   MID: 'bg-emerald-900/60 text-emerald-400',
   FWD: 'bg-orange-900/60 text-orange-400',
+};
+
+const POS_RING: Record<string, string> = {
+  GK:  'ring-yellow-400/35',
+  DEF: 'ring-sky-400/35',
+  MID: 'ring-emerald-400/35',
+  FWD: 'ring-orange-400/35',
 };
 
 function ratingColor(r: number | null): string {
@@ -267,6 +274,111 @@ function AdditionalStats({ cells }: { cells: StatCell[] }) {
   );
 }
 
+// ─── Rich stat visualization ──────────────────────────────────────────────────
+
+/** Stats where a lower value (lower percentile) is better for the player. */
+const NEGATIVE_STAT_IDS = new Set([
+  'yellow_cards', 'red_cards', 'fouls', 'dispossessed',
+  'dribbled_past', 'goals_conceded_while_on_pitch',
+  'expected_goals_against_while_on_pitch',
+]);
+
+function percentileClasses(pct: number, isNegative: boolean): string {
+  const effective = isNegative ? 100 - pct : pct;
+  if (effective >= 80) return 'bg-emerald-500 text-emerald-400';
+  if (effective >= 60) return 'bg-yellow-500 text-yellow-400';
+  if (effective >= 40) return 'bg-orange-500 text-orange-400';
+  return 'bg-red-500 text-red-400';
+}
+
+function StatRow({ item }: { item: PlayerStatItem }) {
+  const pct = Math.round(item.percentileRank);
+  const isNeg = NEGATIVE_STAT_IDS.has(item.localizedTitleId);
+  const cls = percentileClasses(pct, isNeg);
+  const [barCls, textCls] = cls.split(' ');
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-36 shrink-0 truncate text-[11px] text-gray-400" title={item.title}>{item.title}</span>
+      <span className="w-10 shrink-0 text-right text-[11px] font-semibold tabular-nums text-white">
+        {item.statFormat === 'percent' ? `${item.statValue}%` : item.statValue}
+      </span>
+      <div className="relative flex-1 h-1.5 overflow-hidden rounded-full bg-gray-800">
+        <div className={`h-full rounded-full ${barCls}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className={`w-8 shrink-0 text-right text-[10px] tabular-nums ${textCls}`}>{pct}</span>
+    </div>
+  );
+}
+
+function RichStatsPanel({ playerId }: { playerId: number }) {
+  const [stats, setStats]       = useState<PlayerRichStats | null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [activeGroup, setActive] = useState(0);
+
+  useEffect(() => {
+    setLoading(true);
+    setStats(null);
+    setActive(0);
+    fetch(`/api/players/${playerId}/stats`)
+      .then((r) => r.json())
+      .then((d) => setStats(d.stats ?? null))
+      .catch(() => null)
+      .finally(() => setLoading(false));
+  }, [playerId]);
+
+  if (loading) {
+    return (
+      <div className="space-y-2 rounded-xl border border-white/8 bg-gray-950 p-3">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <div className="shimmer h-2.5 w-28 rounded" />
+            <div className="shimmer ml-auto h-2.5 w-8 rounded" />
+            <div className="shimmer h-1.5 flex-1 rounded-full" />
+            <div className="shimmer h-2 w-6 rounded" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (!stats || stats.groups.length === 0) {
+    return (
+      <div className="rounded-xl border border-white/8 bg-gray-950 px-3 py-4 text-center text-xs text-gray-600">
+        Positional stats temporarily unavailable
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-white/8 bg-gray-950 p-3 space-y-3">
+      {/* Group tabs */}
+      <div className="flex flex-wrap gap-1">
+        {stats.groups.map((g, i) => (
+          <button
+            key={g.localizedTitleId}
+            onClick={() => setActive(i)}
+            className={`rounded-lg px-2 py-1 text-[10px] font-semibold transition ${
+              activeGroup === i
+                ? 'bg-white/15 text-white'
+                : 'text-gray-600 hover:text-gray-300'
+            }`}
+          >
+            {g.title}
+          </button>
+        ))}
+      </div>
+
+      {/* Stat rows */}
+      <div className="space-y-1.5">
+        {stats.groups[activeGroup]?.items.map((item) => (
+          <StatRow key={item.localizedTitleId} item={item} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Analytics card ───────────────────────────────────────────────────────────
 
 function AnalyticsCard({
@@ -353,14 +465,26 @@ function AnalyticsCard({
   return (
     <div className="rounded-xl border border-white/8 bg-gray-900 p-3.5 space-y-2.5 flex flex-col">
       {/* Header */}
-      <div className="flex items-start gap-2.5">
-        <span className="shrink-0 text-xs tabular-nums text-gray-600 w-4 mt-1">{rank}</span>
-        <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-full bg-gray-800">
-          <Image src={player.imageUrl} alt={player.name} fill className="object-cover" unoptimized />
+      <div className="flex items-center gap-3">
+        {/* Avatar + rank badge */}
+        <div className="relative shrink-0">
+          <div className={`relative h-9 w-9 overflow-hidden rounded-full bg-gray-800 ring-2 ${POS_RING[pg] ?? 'ring-white/10'}`}>
+            <Image src={player.imageUrl} alt={player.name} fill className="object-cover" unoptimized />
+          </div>
+          <span className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-gray-950 text-[8px] font-bold tabular-nums text-gray-500 ring-1 ring-gray-700">
+            {rank}
+          </span>
         </div>
+
+        {/* Name / team / positions */}
         <div className="min-w-0 flex-1">
           <p className="font-semibold text-white text-sm leading-snug truncate">{player.name}</p>
-          <p className="text-[11px] text-gray-500 truncate">{player.teamName}</p>
+          <div className="flex items-center gap-1 mt-0.5">
+            <div className="relative h-3.5 w-3.5 shrink-0">
+              <Image src={`https://images.fotmob.com/image_resources/logo/teamlogo/${player.teamId}.png`} alt="" fill className="object-contain" unoptimized />
+            </div>
+            <p className="text-[11px] text-gray-500 truncate">{player.teamName}</p>
+          </div>
           <div className="mt-1 flex items-center gap-1">
             {player.mantraPositions.length > 0 ? (
               player.mantraPositions.map((mp) => {
@@ -379,8 +503,10 @@ function AnalyticsCard({
             )}
           </div>
         </div>
+
+        {/* Rating */}
         <div className="shrink-0 text-right">
-          <p className={`text-xl font-bold tabular-nums leading-tight ${ratingColor(player.rating)}`}>
+          <p className={`text-2xl font-bold tabular-nums leading-tight ${ratingColor(player.rating)}`}>
             {player.rating?.toFixed(2) ?? '—'}
           </p>
           <p className="text-[10px] text-gray-600">rating</p>
@@ -432,6 +558,7 @@ function AnalyticsCard({
           <span>RC <span className="text-red-500 font-bold">{player.redCards}</span></span>
         )}
       </div>
+
     </div>
   );
 }
@@ -702,10 +829,15 @@ export default function AnalyticsPage() {
                             </div>
                             <div className="min-w-0">
                               <p className="truncate font-medium text-white">{player.name}</p>
-                              <p className="text-xs text-gray-600">
-                                {player.mantraPositions.length > 0 ? player.mantraPositions.join('/') : player.position}
-                                {' · '}{player.teamName}
-                              </p>
+                              <div className="flex items-center gap-1">
+                                <div className="relative h-3.5 w-3.5 shrink-0">
+                                  <Image src={`https://images.fotmob.com/image_resources/logo/teamlogo/${player.teamId}.png`} alt="" fill className="object-contain" unoptimized />
+                                </div>
+                                <p className="text-xs text-gray-600">
+                                  {player.mantraPositions.length > 0 ? player.mantraPositions.join('/') : player.position}
+                                  {' · '}{player.teamName}
+                                </p>
+                              </div>
                             </div>
                           </div>
                         </td>

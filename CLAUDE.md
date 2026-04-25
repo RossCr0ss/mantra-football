@@ -40,6 +40,7 @@ See `docs/fotmob-api.md` for all FotMob endpoint shapes and known quirks.
 | `fetchLeagueStatsList(leagueId, seasonId, statKey)` | Single stat list from data.fotmob.com (cleansheet, saves, expectedgoals, shots, keypasses) |
 | `fetchLeagueSeasonId(leagueId)` | Primary season ID for a league |
 | `fetchPlayerInjuryInfo(playerId)` | Live injury info from FotMob playerData endpoint |
+| `fetchPlayerRichStats(playerId)` | Full `firstSeasonStats.statsSection` with percentile ranks per stat group (Shooting/Passing/Possession/Defending/Discipline) |
 | `fetchLeagueData(leagueId)` | **Single call** → `{ tablePositions: Map<teamId,pos>, matches: LeagueMatch[], currentRound }`. Replaces per-team fixture fetching. |
 | `fetchMatchOdds(matchId)` | 1×2 decimal odds — server-side only, uses `FOTMOB_CCODE3` + `FOTMOB_BETTING_PROVIDER` env vars |
 | `fetchMatchOddsClient(matchId)` | Client-side proxy caller → hits `/api/matches/[id]/odds` |
@@ -47,7 +48,7 @@ See `docs/fotmob-api.md` for all FotMob endpoint shapes and known quirks.
 ### FotMob endpoints used internally
 - `https://www.fotmob.com/api/data/leagues?id={id}` — league table (`data.table`) + all season matches (`data.fixtures.allMatches`); used by `fetchLeagueTeams` and `fetchLeagueData`
 - `https://www.fotmob.com/api/data/teams?id={id}` — squad, season stats, primarySeasonId; used by `fetchTeamPlayers`
-- `https://www.fotmob.com/api/playerData?id={id}` — player injury info (injuryInformation field)
+- `https://www.fotmob.com/api/data/playerData?id={id}` — player injury info (`injuryInformation` field) + season stats (`firstSeasonStats.statsSection`); note `/api/data/` prefix, not `/api/`
 - `https://www.fotmob.com/api/data/matchOdds?matchId={id}&ccode3={ccode3}&bettingProvider={provider}` — 1×2 odds; requires country code + provider name
 - `https://data.fotmob.com/stats/{leagueId}/season/{seasonId}/rating.json` — gzipped league rating stats
 - `https://data.fotmob.com/stats/{leagueId}/season/{seasonId}/{statKey}.json` — stat-specific lists
@@ -87,6 +88,7 @@ All under `apps/web/src/app/api/`:
 | `/api/players/[id]/injury` | GET | Injury info (DB override → FotMob fallback) |
 | `/api/players/[id]/injury` | PUT | Manually override injury info in MongoDB (pass `{cleared: true}` to mark healed) |
 | `/api/players/[id]/injury` | DELETE | Delete DB override; returns current live FotMob data |
+| `/api/players/[id]/stats` | GET | Rich season stats with percentile ranks (`PlayerRichStats`) — lazy-fetched per player in analytics |
 
 ## Pages (apps/web/src/app/)
 | Path | Component | Server/Client | Description |
@@ -111,11 +113,14 @@ All under `apps/web/src/app/api/`:
 | `PositionGroup` | `apps/web/src/types/squad.ts` | GK, DEF, MID, FWD |
 | `FotMobPlayer` | `apps/web/src/lib/fotmob.ts` | Player with season stats from FotMob |
 | `FotMobTeam` | `apps/web/src/lib/fotmob.ts` | Team with logo URL |
-| `PlayerInjuryInfo` | `apps/web/src/lib/fotmob.ts` | Injury name, expected return, override flag |
+| `PlayerInjuryInfo` | `apps/web/src/lib/fotmob.ts` | Injury name, expected return, override flag, `cleared` flag (manually healed) |
 | `LeagueMatch` | `apps/web/src/lib/fotmob.ts` | Raw match from `data.fixtures.allMatches` |
 | `TeamFixture` | `apps/web/src/lib/fotmob.ts` | `LeagueMatch` + isHome, opponent, difficulty 1–5, odds |
 | `FixtureOdds` | `apps/web/src/lib/fotmob.ts` | home / draw / away decimal odds |
 | `PlayerSeasonStats` | `apps/web/src/lib/fotmob.ts` | Rating, goals, assists, cards, plus GK (cleanSheets, saves) and MID/FWD (xG, shots, chancesCreated) stats |
+| `PlayerStatItem` | `apps/web/src/lib/fotmob.ts` | Single stat with value, per90, percentileRank (0–100 vs position peers), statFormat |
+| `PlayerStatGroup` | `apps/web/src/lib/fotmob.ts` | Named group of `PlayerStatItem[]` (e.g. "Shooting", "Passing") |
+| `PlayerRichStats` | `apps/web/src/lib/fotmob.ts` | `{ groups: PlayerStatGroup[] }` — from `firstSeasonStats.statsSection`; lazy-fetched in analytics |
 | `PlayerAnalytics` | `apps/web/src/app/api/leagues/[id]/analytics/route.ts` | PlayerSeasonStats + name, team, position, image |
 
 ### Key SquadPlayer fields

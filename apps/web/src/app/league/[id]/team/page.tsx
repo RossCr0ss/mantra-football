@@ -35,7 +35,7 @@ export default async function TeamPage({ params }: Props) {
     mantraPositions: p.mantraPositions ?? [],
   }));
 
-  const injuryMap = await getPlayerInjuriesBatch(players.map((p) => p.id));
+  const injuryMap = await getPlayerInjuriesBatch(players);
   const injuries: Record<number, PlayerInjuryInfo> = {};
   for (const [idStr, info] of Object.entries(injuryMap)) {
     if (info) injuries[Number(idStr)] = info;

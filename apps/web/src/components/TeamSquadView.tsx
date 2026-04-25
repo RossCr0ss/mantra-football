@@ -37,6 +37,13 @@ const POSITION_SECTIONS: { group: PositionGroup; label: string }[] = [
 
 const MANTRA_POSITION_ORDER = Object.fromEntries(MANTRA_POSITIONS.map((p, i) => [p.code, i]));
 
+const POS_RING: Record<string, string> = {
+  GK:  'ring-yellow-400/35',
+  DEF: 'ring-sky-400/35',
+  MID: 'ring-emerald-400/35',
+  FWD: 'ring-orange-400/35',
+};
+
 function effectiveGroup(player: SquadPlayer): PositionGroup {
   if (player.mantraPositions.length > 0) {
     const def = MANTRA_POSITIONS.find((d) => d.code === player.mantraPositions[0]);
@@ -132,8 +139,8 @@ export default function TeamSquadView({ leagueId, initialPlayers, injuries: init
   function startEditInjury(player: SquadPlayer) {
     const info = injuries[player.id];
     setEditForm({
-      name: info?.name ?? '',
-      expectedReturnDate: info?.expectedReturnDate ?? '',
+      name: info?.cleared ? '' : (info?.name ?? ''),
+      expectedReturnDate: info?.cleared ? '' : (info?.expectedReturnDate ?? ''),
     });
     setEditingInjuryId(player.id);
   }
@@ -164,16 +171,13 @@ export default function TeamSquadView({ leagueId, initialPlayers, injuries: init
   async function clearInjury(playerId: number) {
     setInjuryActionId(playerId);
     try {
-      await fetch(`/api/players/${playerId}/injury`, {
+      const res = await fetch(`/api/players/${playerId}/injury`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cleared: true }),
       });
-      setInjuries((prev) => {
-        const next = { ...prev };
-        delete next[playerId];
-        return next;
-      });
+      const data = await res.json();
+      setInjuries((prev) => ({ ...prev, [playerId]: data.injury }));
       setEditingInjuryId(null);
     } finally {
       setInjuryActionId(null);
@@ -224,7 +228,7 @@ export default function TeamSquadView({ leagueId, initialPlayers, injuries: init
     }
   }
 
-  const injuredPlayers = players.filter((p) => injuries[p.id] != null);
+  const injuredPlayers = players.filter((p) => injuries[p.id] != null && !injuries[p.id]!.cleared);
 
   return (
     <div className="space-y-10">
@@ -263,7 +267,12 @@ export default function TeamSquadView({ leagueId, initialPlayers, injuries: init
 
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-semibold text-white">{player.name}</p>
-                      <p className="text-xs text-gray-500">{player.position} · {player.teamName}</p>
+                      <div className="mt-0.5 flex items-center gap-1">
+                        <div className="relative h-3.5 w-3.5 shrink-0">
+                          <Image src={`https://images.fotmob.com/image_resources/logo/teamlogo/${player.teamId}.png`} alt="" fill className="object-contain" unoptimized />
+                        </div>
+                        <p className="text-xs text-gray-500">{player.position} · {player.teamName}</p>
+                      </div>
                     </div>
 
                     <div className="shrink-0 text-right">
@@ -476,26 +485,43 @@ function PlayerCard({
   const isBlocked = player.lineupStatus === 'injured' || player.lineupStatus === 'suspended';
   const displayPct = localPct ?? (player.availabilityPct ?? 100);
 
+  const pg = effectiveGroup(player);
   const cardBorderClass =
     player.lineupStatus === 'suspended' ? 'border-orange-500/20 bg-orange-950/8' :
     player.lineupStatus === 'injured'   ? 'border-red-500/20 bg-red-950/8'       :
                                           'border-white/8 bg-gray-900';
 
   return (
-    <div className={`flex flex-col gap-2.5 rounded-xl border p-3 transition ${cardBorderClass}`}>
-      {/* Avatar + name */}
-      <div className="flex flex-col items-center gap-2 text-center">
-        <div className="relative h-14 w-14 overflow-hidden rounded-full bg-gray-800 ring-2 ring-white/5">
+    <div className={`flex flex-col overflow-hidden rounded-xl border transition ${cardBorderClass}`}>
+      {/* Header: circle avatar + name + team */}
+      <div className="flex items-center gap-3 px-3 pt-3 pb-2">
+        <div className={`relative h-11 w-11 shrink-0 overflow-hidden rounded-full bg-gray-800 ring-2 ${POS_RING[pg] ?? 'ring-white/10'}`}>
           <Image src={player.imageUrl} alt={player.name} fill className="object-cover" unoptimized />
         </div>
-        <div className="w-full min-w-0">
-          <p className="truncate text-xs font-semibold leading-tight text-white">{player.name}</p>
-          <p className="truncate text-xs text-gray-600">{player.teamName}</p>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <p className="truncate text-xs font-semibold leading-tight text-white">{player.name}</p>
+            {player.lineupStatus === 'injured' && (
+              <span className="shrink-0 rounded bg-red-600/80 px-1 py-0.5 text-[8px] font-bold text-white">INJ</span>
+            )}
+            {player.lineupStatus === 'suspended' && (
+              <span className="shrink-0 rounded bg-orange-600/80 px-1 py-0.5 text-[8px] font-bold text-white">SUS</span>
+            )}
+          </div>
+          <div className="mt-0.5 flex items-center gap-1">
+            <div className="relative h-3.5 w-3.5 shrink-0">
+              <Image src={`https://images.fotmob.com/image_resources/logo/teamlogo/${player.teamId}.png`} alt="" fill className="object-contain" unoptimized />
+            </div>
+            <p className="truncate text-[10px] text-gray-500">{player.teamName}</p>
+          </div>
         </div>
       </div>
 
+      {/* Controls */}
+      <div className="flex flex-col gap-2.5 px-3 pb-3">
       {/* Mantra positions */}
-      <div className="flex flex-wrap justify-center gap-1">
+      <div className="flex flex-wrap gap-1">
         {player.mantraPositions.length === 0 ? (
           <span className="text-xs text-gray-700">No position</span>
         ) : (
@@ -513,8 +539,13 @@ function PlayerCard({
         )}
       </div>
 
-      {/* Injury badge */}
-      {injury && (
+      {/* Injury / healed badge */}
+      {injury?.cleared ? (
+        <div className="rounded-lg border border-green-500/20 bg-green-950/30 px-2 py-1 text-center">
+          <p className="text-xs font-semibold text-green-400">✓ Healed</p>
+          <p className="text-[10px] text-green-600">manually cleared</p>
+        </div>
+      ) : injury ? (
         <div className="rounded-lg border border-red-500/20 bg-red-950/40 px-2 py-1 text-center">
           <p className="text-xs font-semibold text-red-400">{injury.name ?? 'Injured'}</p>
           {returning ? (
@@ -523,7 +554,7 @@ function PlayerCard({
             <p className="text-xs text-red-300/60">{injury.expectedReturn}</p>
           ) : null}
         </div>
-      )}
+      ) : null}
 
       {/* Status controls */}
       <div className="space-y-0.5 rounded-lg bg-gray-950/80 p-0.5">
@@ -627,6 +658,7 @@ function PlayerCard({
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }

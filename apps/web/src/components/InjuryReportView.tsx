@@ -32,7 +32,7 @@ export default function InjuryReportView({ leagueId, initialPlayers, initialInju
   const [actionId, setActionId] = useState<number | null>(null);
 
   // ── Categories ───────────────────────────────────────────────────────────────
-  const injuredPlayers   = players.filter((p) => injuries[p.id] != null || p.lineupStatus === 'injured');
+  const injuredPlayers   = players.filter((p) => (injuries[p.id] != null && !injuries[p.id]!.cleared) || p.lineupStatus === 'injured');
   const suspendedPlayers = players.filter((p) => p.lineupStatus === 'suspended');
   const doubtfulPlayers  = players.filter(
     (p) =>
@@ -67,16 +67,13 @@ export default function InjuryReportView({ leagueId, initialPlayers, initialInju
   async function clearInjury(playerId: number) {
     setActionId(playerId);
     try {
-      await fetch(`/api/players/${playerId}/injury`, {
+      const res = await fetch(`/api/players/${playerId}/injury`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cleared: true }),
       });
-      setInjuries((prev) => {
-        const next = { ...prev };
-        delete next[playerId];
-        return next;
-      });
+      const data = await res.json();
+      setInjuries((prev) => ({ ...prev, [playerId]: data.injury }));
       setPlayers((prev) =>
         prev.map((p) => (p.id === playerId && p.lineupStatus === 'injured' ? { ...p, lineupStatus: undefined } : p)),
       );
@@ -340,7 +337,12 @@ function PlayerRow({ player, children }: { player: SquadPlayer; children: React.
       </div>
       <div className="min-w-0 w-36 shrink-0">
         <p className="truncate text-sm font-semibold text-white">{player.name}</p>
-        <p className="truncate text-xs text-gray-500">{player.position} · {player.teamName}</p>
+        <div className="mt-0.5 flex items-center gap-1">
+          <div className="relative h-3.5 w-3.5 shrink-0">
+            <Image src={`https://images.fotmob.com/image_resources/logo/teamlogo/${player.teamId}.png`} alt="" fill className="object-contain" unoptimized />
+          </div>
+          <p className="truncate text-xs text-gray-500">{player.position} · {player.teamName}</p>
+        </div>
       </div>
       {children}
     </div>

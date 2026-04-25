@@ -26,11 +26,13 @@ import {
   fetchLeagueStatsList,
   fetchPlayerRecentMatches,
   fetchPlayerSeasonStats,
+  fetchPlayerRichStats,
   type FotMobTeam,
   type FotMobPlayer,
   type PlayerSeasonStats,
   type FixtureOdds,
   type PlayerRecentMatch,
+  type PlayerRichStats,
 } from './fotmob';
 import { withCache, CACHE_TTL } from './mongoCache';
 
@@ -183,6 +185,21 @@ export function getPlayerFormCached(
     if (Array.isArray(r)) return r as unknown as PlayerRecentMatch[];
     return r.matches ?? [];
   });
+}
+
+// ─── Per-player rich stats (statsSection with percentile ranks) ───────────────
+
+export function getPlayerRichStatsCached(
+  playerId: number,
+  opts?: Opts,
+): Promise<PlayerRichStats | null> {
+  return withCache<PlayerRichStats | null>(
+    'fotmob_rich_stats',
+    { playerId },
+    CACHE_TTL.PLAYERS,
+    () => fetchPlayerRichStats(playerId),
+    opts,
+  );
 }
 
 // ─── League stat lists (cleansheet, saves, xG, etc.) ─────────────────────────

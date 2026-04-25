@@ -1,4 +1,16 @@
-const FOTMOB_HEADERS = { 'User-Agent': 'Mozilla/5.0' };
+const FOTMOB_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+  'Accept': 'application/json, text/plain, */*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Referer': 'https://www.fotmob.com/',
+  'Origin': 'https://www.fotmob.com',
+  'sec-ch-ua': '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
+  'sec-fetch-dest': 'empty',
+  'sec-fetch-mode': 'cors',
+  'sec-fetch-site': 'same-origin',
+};
 
 export interface PlayerSeasonStats {
   playerId: number;
@@ -42,48 +54,61 @@ export interface PlayerSeasonStats {
 
 /**
  * Returns a map of playerId → stats for all players currently in the team squad.
- * Uses the cached api/data/teams endpoint (same one used for player listing).
+ * Base stats (rating/goals/assists/cards) come from the team endpoint.
+ * Detailed positional stats (cleanSheets, tackles, xG, …) are fetched per-player
+ * from the playerData endpoint in parallel and merged in.  If playerData is
+ * unavailable the fields fall back to null.
  */
 export async function fetchTeamPlayerStats(
   teamId: number,
   teamName: string,
 ): Promise<Map<number, PlayerSeasonStats>> {
   const players = await fetchTeamPlayers(teamId, teamName);
+
+  // Fetch detailed per-player stats in parallel; silently fall back to {} on failure.
+  const detailResults = await Promise.allSettled(
+    players.map((p) => fetchPlayerSeasonStats(p.id)),
+  );
+
   const map = new Map<number, PlayerSeasonStats>();
-  for (const p of players) {
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i];
+    const r = detailResults[i];
+    const d: Partial<PlayerSeasonStats> = r.status === 'fulfilled' ? r.value : {};
+
     map.set(p.id, {
-      playerId: p.id,
-      rating: p.seasonRating,
-      goals: p.goals,
-      assists: p.assists,
-      yellowCards: p.yellowCards,
-      redCards: p.redCards,
-      leagueRank: null,
-      matchesPlayed: null,
-      minutesPlayed: null,
-      cleanSheets: null,
-      saves: null,
-      goalsConceded: null,
-      savePercentage: null,
-      goalsPrevented: null,
-      penaltySaves: null,
-      actedSweeper: null,
-      highClaims: null,
-      errorLeadToGoal: null,
-      tackles: null,
-      interceptions: null,
-      clearances: null,
-      blockedShots: null,
-      aerialsWon: null,
-      foulsCommitted: null,
-      possessionWonFinal3rd: null,
-      dribbledPast: null,
-      expectedGoals: null,
-      shots: null,
-      chancesCreated: null,
-      successfulDribbles: null,
-      bigChancesCreated: null,
-      bigChancesMissed: null,
+      playerId:              p.id,
+      rating:                p.seasonRating ?? d.rating ?? null,
+      goals:                 p.goals        || d.goals        || 0,
+      assists:               p.assists      || d.assists      || 0,
+      yellowCards:           p.yellowCards  || d.yellowCards  || 0,
+      redCards:              p.redCards     || d.redCards     || 0,
+      leagueRank:            d.leagueRank            ?? null,
+      matchesPlayed:         d.matchesPlayed         ?? null,
+      minutesPlayed:         d.minutesPlayed         ?? null,
+      cleanSheets:           d.cleanSheets           ?? null,
+      saves:                 d.saves                 ?? null,
+      goalsConceded:         d.goalsConceded         ?? null,
+      savePercentage:        d.savePercentage        ?? null,
+      goalsPrevented:        d.goalsPrevented        ?? null,
+      penaltySaves:          d.penaltySaves          ?? null,
+      actedSweeper:          d.actedSweeper          ?? null,
+      highClaims:            d.highClaims            ?? null,
+      errorLeadToGoal:       d.errorLeadToGoal       ?? null,
+      tackles:               d.tackles               ?? null,
+      interceptions:         d.interceptions         ?? null,
+      clearances:            d.clearances            ?? null,
+      blockedShots:          d.blockedShots          ?? null,
+      aerialsWon:            d.aerialsWon            ?? null,
+      foulsCommitted:        d.foulsCommitted        ?? null,
+      possessionWonFinal3rd: d.possessionWonFinal3rd ?? null,
+      dribbledPast:          d.dribbledPast          ?? null,
+      expectedGoals:         d.expectedGoals         ?? null,
+      shots:                 d.shots                 ?? null,
+      chancesCreated:        d.chancesCreated        ?? null,
+      successfulDribbles:    d.successfulDribbles    ?? null,
+      bigChancesCreated:     d.bigChancesCreated     ?? null,
+      bigChancesMissed:      d.bigChancesMissed      ?? null,
     });
   }
   return map;
@@ -262,6 +287,8 @@ export interface PlayerInjuryInfo {
   lastUpdated: string | null;
   /** True when the record has been manually overridden in the database */
   overridden?: boolean;
+  /** True when the player was manually marked as healed; FotMob data is suppressed */
+  cleared?: boolean;
 }
 
 export interface FotMobPlayer {
@@ -288,17 +315,21 @@ export async function fetchPlayerInjuryInfo(playerId: number): Promise<PlayerInj
   let res: Response;
   try {
     res = await fetch(
-      `https://www.fotmob.com/api/playerData?id=${playerId}`,
+      `https://www.fotmob.com/api/data/playerData?id=${playerId}`,
       { headers: FOTMOB_HEADERS, cache: 'no-store' },
     );
-  } catch {
+  } catch (error) {
     return null;
   }
-  if (!res.ok) return null;
+  if (!res.ok) {
+    return null;
+  }
 
   const data = await res.json();
   const injury = data?.injuryInformation;
-  if (!injury) return null;
+  if (!injury) {
+    return null;
+  }
 
   return {
     name: injury.name ?? 'Unknown injury',
@@ -354,7 +385,7 @@ const STAT_KEY_MAP: Partial<Record<string, keyof PlayerSeasonStats>> = {
 
 /** Same as STAT_KEY_MAP but matched against the human-readable title string. */
 const STAT_TITLE_MAP: Partial<Record<string, keyof PlayerSeasonStats>> = {
-  'Matches played': 'matchesPlayed', 'Minutes played': 'minutesPlayed',
+  'Matches played': 'matchesPlayed', 'Matches': 'matchesPlayed', 'Minutes played': 'minutesPlayed',
   'Goals': 'goals', 'Assists': 'assists',
   'Yellow cards': 'yellowCards', 'Red cards': 'redCards',
   // GK
@@ -498,7 +529,7 @@ export async function fetchPlayerSeasonStats(
 ): Promise<Partial<PlayerSeasonStats>> {
   try {
     const res = await fetch(
-      `https://www.fotmob.com/api/playerData?id=${playerId}`,
+      `https://www.fotmob.com/api/data/playerData?id=${playerId}`,
       { headers: FOTMOB_HEADERS, cache: 'no-store' },
     );
     if (!res.ok) return {};
@@ -520,6 +551,74 @@ export async function fetchPlayerSeasonStats(
     return partial;
   } catch {
     return {};
+  }
+}
+
+// ── Rich per-player stats from firstSeasonStats.statsSection ─────────────────
+
+export interface PlayerStatItem {
+  title: string;
+  localizedTitleId: string;
+  statValue: string;
+  per90: number;
+  /** 0–100: what % of positional peers rank lower for this stat */
+  percentileRank: number;
+  statFormat: 'number' | 'fraction' | 'percent';
+}
+
+export interface PlayerStatGroup {
+  title: string;
+  localizedTitleId: string;
+  items: PlayerStatItem[];
+}
+
+export interface PlayerRichStats {
+  groups: PlayerStatGroup[];
+}
+
+/**
+ * Fetches `firstSeasonStats.statsSection` from the FotMob playerData endpoint.
+ * Returns structured stat groups with percentile rank data (vs positional peers).
+ */
+export async function fetchPlayerRichStats(playerId: number): Promise<PlayerRichStats | null> {
+  try {
+    const res = await fetch(
+      `https://www.fotmob.com/api/data/playerData?id=${playerId}`,
+      { headers: FOTMOB_HEADERS, cache: 'no-store' },
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as Record<string, unknown>;
+
+    const firstSeasonStats = data?.firstSeasonStats as Record<string, unknown> | null;
+    const statsSection = firstSeasonStats?.statsSection as Record<string, unknown> | null;
+    if (!statsSection) return null;
+
+    const rawGroups = (statsSection.items ?? []) as Record<string, unknown>[];
+    const groups: PlayerStatGroup[] = [];
+
+    for (const rawGroup of rawGroups) {
+      if (rawGroup.display !== 'stats-group') continue;
+      const rawItems = (rawGroup.items ?? []) as Record<string, unknown>[];
+      const items: PlayerStatItem[] = rawItems.map((gi) => ({
+        title: String(gi.title ?? ''),
+        localizedTitleId: String(gi.localizedTitleId ?? ''),
+        statValue: String(gi.statValue ?? ''),
+        per90: Number(gi.per90 ?? 0),
+        percentileRank: Number(gi.percentileRank ?? 0),
+        statFormat: (gi.statFormat as PlayerStatItem['statFormat']) ?? 'number',
+      }));
+      if (items.length > 0) {
+        groups.push({
+          title: String(rawGroup.title ?? ''),
+          localizedTitleId: String(rawGroup.localizedTitleId ?? ''),
+          items,
+        });
+      }
+    }
+
+    return groups.length > 0 ? { groups } : null;
+  } catch {
+    return null;
   }
 }
 
@@ -545,7 +644,7 @@ export interface PlayerRecentMatch {
 export async function fetchPlayerRecentMatches(playerId: number): Promise<PlayerRecentMatch[]> {
   try {
     const res = await fetch(
-      `https://www.fotmob.com/api/playerData?id=${playerId}`,
+      `https://www.fotmob.com/api/data/playerData?id=${playerId}`,
       { headers: FOTMOB_HEADERS, cache: 'no-store' },
     );
     if (!res.ok) return [];
@@ -657,6 +756,8 @@ export interface LeagueMatch {
   homeTeam: FixtureTeam;
   awayTeam: FixtureTeam;
   finished: boolean;
+  homeScore: number | null;
+  awayScore: number | null;
 }
 
 /** LeagueMatch enriched with team-relative fields (isHome, opponent, difficulty). */
@@ -744,8 +845,8 @@ export async function fetchLeagueData(leagueId: number): Promise<{
 
   const matches: LeagueMatch[] = raw
     .map((m): LeagueMatch | null => {
-      const home = m.home as { id: string | number; name: string } | null;
-      const away = m.away as { id: string | number; name: string } | null;
+      const home = m.home as { id: string | number; name: string; score?: number | string | null } | null;
+      const away = m.away as { id: string | number; name: string; score?: number | string | null } | null;
       const status = m.status as {
         utcTime?: string; finished?: boolean; started?: boolean; cancelled?: boolean;
       } | null;
@@ -754,6 +855,8 @@ export async function fetchLeagueData(leagueId: number): Promise<{
       const awayId = Number(away.id);
       if (!homeId || !awayId) return null;
       const roundRaw = m.round ?? m.roundName;
+      const homeScore = home.score != null ? Number(home.score) : null;
+      const awayScore = away.score != null ? Number(away.score) : null;
       return {
         matchId: String(m.id ?? ''),
         date: status?.utcTime ?? '',
@@ -769,6 +872,8 @@ export async function fetchLeagueData(leagueId: number): Promise<{
           logoUrl: `https://images.fotmob.com/image_resources/logo/teamlogo/${awayId}.png`,
         },
         finished: status?.finished ?? false,
+        homeScore: !isNaN(homeScore!) ? homeScore : null,
+        awayScore: !isNaN(awayScore!) ? awayScore : null,
       };
     })
     .filter((m): m is LeagueMatch => m !== null);

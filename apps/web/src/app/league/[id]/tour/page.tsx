@@ -12,6 +12,23 @@ import type { TeamFixture, FixtureOdds } from '@/lib/fotmob';
 import type { SquadPlayer, PositionGroup, MantraPosition } from '@/types/squad';
 import type { PlayerAnalytics } from '@/app/api/leagues/[id]/analytics/route';
 import type { PlayerRecentMatch } from '@/lib/fotmob';
+import { MANTRA_POSITIONS } from '@/lib/mantraPositions';
+
+// ─── Position helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Derives the effective position group from manual Mantra positions.
+ * Mantra positions take priority over FotMob's broad positionGroup so that
+ * a player manually tagged as CB/DM (DEF) is never treated as a midfielder
+ * even if FotMob classifies them as MID.
+ */
+function effectivePositionGroup(player: SquadPlayer): PositionGroup {
+  if (player.mantraPositions.length > 0) {
+    const def = MANTRA_POSITIONS.find((d) => d.code === player.mantraPositions[0]);
+    if (def) return def.group;
+  }
+  return player.positionGroup;
+}
 
 // ─── Scoring ──────────────────────────────────────────────────────────────────
 
@@ -88,8 +105,7 @@ function calcScore(
   const hasData = matchesPlayed > 3;
   const goals = analytics?.goals ?? 0;
   const assists = analytics?.assists ?? 0;
-  // Use analytics.positionGroup which already reflects manual mantra positions
-  const group = analytics?.positionGroup ?? player.positionGroup;
+  const group = analytics?.positionGroup ?? effectivePositionGroup(player);
   const positions = player.mantraPositions ?? [];
 
   const gpg = hasData ? goals / matchesPlayed : 0;
@@ -332,12 +348,12 @@ interface ModuleAssignment {
 
 function assignModule(available: EnrichedPlayer[], slots: MantraPosition[][]): ModuleAssignment | null {
   const gks = available
-    .filter((p) => p.positionGroup === 'GK')
+    .filter((p) => effectivePositionGroup(p) === 'GK')
     .sort((a, b) => b.scoreBreakdown.total - a.scoreBreakdown.total);
   if (!gks[0]) return null;
 
   const used = new Set<number>([gks[0].id]);
-  const outfield = available.filter((p) => p.positionGroup !== 'GK');
+  const outfield = available.filter((p) => effectivePositionGroup(p) !== 'GK');
   const result: (number | null)[] = new Array(slots.length).fill(null);
   const resultPenalty: (number | null)[] = new Array(slots.length).fill(null);
   const filled = new Set<number>();
@@ -468,7 +484,7 @@ function PitchView({
   const module = MODULES.find((m) => m.name === moduleName);
 
   return (
-    <div className="mx-auto w-full max-w-sm sm:max-w-md">
+    <div className="mx-auto w-full max-w-sm sm:max-w-xl md:max-w-2xl">
       <div className="relative w-full overflow-hidden rounded-2xl" style={{ paddingBottom: '154%' }}>
 
         {/* ── Pitch SVG ──────────────────────────────────────────────────── */}
@@ -538,7 +554,7 @@ function PitchView({
           const pen        = slotsPenalty[slotIdx] ?? 0;
           const display    = effectiveScore(player.scoreBreakdown, pen);
           const tier       = scoreTier(display);
-          const colors     = GROUP_COLORS[player.positionGroup];
+          const colors     = GROUP_COLORS[effectivePositionGroup(player)];
           const slotDef    = isGK ? ['GK'] : (module?.slots[slotIdx - 1] ?? []);
           const roleLabel  = slotDef[0] ?? '';
 
@@ -551,21 +567,26 @@ function PitchView({
               style={{ left: `${cx}%`, top: `${(cy / 154) * 100}%`, transform: 'translate(-50%, -50%)' }}
             >
               {/* Score chip — shows penalized score when out of position */}
-              <span className={`mb-0.5 rounded px-1 text-[7px] font-bold tabular-nums leading-4 ring-1 ${tier.bg} ${tier.text} ${tier.ring}`}>
-                {Math.round(display)}
+              <span className={`mb-0.5 rounded px-1 text-[9px] font-bold tabular-nums leading-4 ring-1 ${tier.bg} ${tier.text} ${tier.ring}`}>
+                {display.toFixed(1)}
               </span>
 
-              {/* Avatar + hover overlay */}
-              <div className={`relative overflow-hidden rounded-full ring-2 transition-all group-hover:ring-red-400 ${isGK ? 'h-9 w-9' : 'h-8 w-8'} ${colors.ring}`}>
-                <Image src={player.imageUrl} alt={player.name} fill className="object-cover" unoptimized />
-                <div className="absolute inset-0 flex items-center justify-center bg-red-600/0 transition-all group-hover:bg-red-600/80">
-                  <span className="text-xs font-bold text-transparent transition-all group-hover:text-white">✕</span>
+              {/* Avatar + team logo badge + hover overlay */}
+              <div className="relative">
+                <div className={`relative overflow-hidden rounded-full ring-2 transition-all group-hover:ring-red-400 ${isGK ? 'h-12 w-12' : 'h-11 w-11'} ${colors.ring}`}>
+                  <Image src={player.imageUrl} alt={player.name} fill className="object-cover" unoptimized />
+                  <div className="absolute inset-0 flex items-center justify-center bg-red-600/0 transition-all group-hover:bg-red-600/80">
+                    <span className="text-xs font-bold text-transparent transition-all group-hover:text-white">✕</span>
+                  </div>
+                </div>
+                <div className="absolute -bottom-0.5 -right-0.5 h-[18px] w-[18px] overflow-hidden rounded-full bg-gray-900 ring-1 ring-black/50">
+                  <Image src={`https://images.fotmob.com/image_resources/logo/teamlogo/${player.teamId}.png`} alt="" fill className="object-contain p-px" unoptimized />
                 </div>
               </div>
 
               {/* Name pill */}
-              <div className="mt-0.5 max-w-[60px] rounded bg-black/70 px-1">
-                <p className="truncate text-center text-[7px] font-semibold leading-4 text-white">
+              <div className="mt-0.5 max-w-[80px] rounded bg-black/70 px-1">
+                <p className="truncate text-center text-[9px] font-semibold leading-4 text-white">
                   {player.name.split(' ').pop()}
                 </p>
               </div>
@@ -573,12 +594,12 @@ function PitchView({
               {/* Slot role badge + out-of-position penalty */}
               <div className="flex items-center gap-0.5">
                 {roleLabel && (
-                  <span className={`rounded px-0.5 text-[6px] font-bold leading-3 text-white ${colors.badge}`}>
+                  <span className={`rounded px-0.5 text-[8px] font-bold leading-3 text-white ${colors.badge}`}>
                     {roleLabel}
                   </span>
                 )}
                 {pen < 0 && (
-                  <span className={`rounded px-0.5 text-[6px] font-bold leading-3 ${pen <= -3 ? 'bg-orange-600/80 text-orange-100' : 'bg-yellow-600/80 text-yellow-100'}`}>
+                  <span className={`rounded px-0.5 text-[8px] font-bold leading-3 ${pen <= -3 ? 'bg-orange-600/80 text-orange-100' : 'bg-yellow-600/80 text-yellow-100'}`}>
                     {pen}
                   </span>
                 )}
@@ -611,10 +632,12 @@ function TourSkeleton() {
         <div className="h-5 w-40 rounded bg-gray-700" />
         <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
           {Array.from({ length: 11 }).map((_, i) => (
-            <div key={i} className="rounded-xl border border-white/8 bg-gray-800 p-3 space-y-2">
-              <div className="mx-auto h-12 w-12 rounded-full bg-gray-700" />
-              <div className="h-3 w-full rounded bg-gray-700" />
-              <div className="h-3 w-3/4 mx-auto rounded bg-gray-800" />
+            <div key={i} className="overflow-hidden rounded-xl border border-white/8 bg-gray-800">
+              <div className="shimmer aspect-[3/4] w-full" />
+              <div className="flex flex-col gap-1.5 p-2">
+                <div className="shimmer h-3 w-full rounded" />
+                <div className="shimmer h-2.5 w-3/4 rounded" />
+              </div>
             </div>
           ))}
         </div>
@@ -652,52 +675,42 @@ function MainCard({ player, onRemove }: { player: EnrichedPlayer; onRemove: () =
     <button
       onClick={onRemove}
       title="Click to remove from Starting XI"
-      className="group relative flex flex-col items-center gap-1.5 rounded-xl border border-white/25 bg-white/6 p-3 text-center ring-1 ring-white/10 transition hover:border-white/40 hover:bg-white/10"
+      className="group relative flex flex-col overflow-hidden rounded-xl border border-white/20 bg-gray-900 text-left ring-1 ring-white/8 transition hover:border-red-500/40"
     >
-      {/* Score badge */}
-      <span className={`absolute top-2 right-2 rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums ring-1 ${tier.bg} ${tier.text} ${tier.ring}`}>
-        {Math.round(sb.total)}
-      </span>
-
-      {/* Remove hint */}
-      <span className="absolute top-2 left-2 rounded bg-red-600/0 px-1 py-0.5 text-[10px] font-bold text-red-400/0 transition group-hover:bg-red-600/80 group-hover:text-white">
-        ✕
-      </span>
-
-      {/* Photo */}
-      <div className="relative mt-3 h-14 w-14 overflow-hidden rounded-full bg-gray-700 ring-2 ring-white/20">
-        <Image src={player.imageUrl} alt={player.name} fill className="object-cover" unoptimized />
+      {/* Portrait image area */}
+      <div className="relative aspect-[3/4] w-full bg-gray-800">
+        {ds && <div className={`absolute inset-x-0 top-0 z-10 h-0.5 ${ds.bg}`} />}
+        <Image src={player.imageUrl} alt={player.name} fill className="object-contain transition-transform duration-300 group-hover:scale-105" unoptimized />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/80 to-transparent" />
+        <span className={`absolute bottom-1.5 left-1.5 z-10 rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums ring-1 ${tier.bg} ${tier.text} ${tier.ring}`}>
+          {sb.total.toFixed(1)}
+        </span>
+        <div className="absolute bottom-1.5 right-1.5 z-10 h-5 w-5">
+          <Image src={`https://images.fotmob.com/image_resources/logo/teamlogo/${player.teamId}.png`} alt="" fill className="object-contain" unoptimized />
+        </div>
+        <div className="absolute inset-0 flex items-center justify-center bg-red-600/0 transition-colors duration-200 group-hover:bg-red-600/50">
+          <span className="text-xl font-bold text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100">✕</span>
+        </div>
       </div>
 
-      {/* Name */}
-      <p className="w-full truncate text-xs font-semibold text-white leading-tight">
-        {player.name}
-      </p>
-      <p className="w-full truncate text-[10px] text-gray-500">{player.teamName}</p>
-
-      {/* Mantra positions */}
-      {player.mantraPositions.length > 0 && (
-        <div className="flex flex-wrap justify-center gap-0.5">
+      {/* Info row */}
+      <div className="flex flex-col gap-1 px-2 py-1.5">
+        <p className="truncate text-[11px] font-semibold leading-tight text-white">{player.name}</p>
+        <div className="flex flex-wrap items-center gap-0.5">
           {player.mantraPositions.slice(0, 2).map((pos) => (
-            <span key={pos} className="rounded bg-white/10 px-1 py-0.5 text-[9px] font-bold text-gray-300">
+            <span key={pos} className="rounded bg-white/10 px-1 py-0.5 text-[8px] font-bold text-gray-300">
               {pos}
             </span>
           ))}
+          {fix && ds ? (
+            <span className={`ml-auto rounded px-1 py-0.5 text-[8px] font-semibold ${ds.bg} ${ds.text}`}>
+              {fix.isHome ? 'vs' : '@'} {fix.opponent.name.split(' ')[0]}
+            </span>
+          ) : (
+            <span className="ml-auto text-[8px] text-gray-700">No fix</span>
+          )}
         </div>
-      )}
-
-      {/* Fixture */}
-      {fix && ds ? (
-        <div className={`w-full rounded-lg px-1.5 py-1 text-center ${ds.bg} ${ds.text}`}>
-          <p className="truncate text-[10px] font-semibold">
-            {fix.isHome ? 'vs' : '@'} {fix.opponent.name}
-          </p>
-        </div>
-      ) : (
-        <div className="w-full rounded-lg bg-gray-800 px-1.5 py-1">
-          <p className="text-[10px] text-gray-600">No fixture</p>
-        </div>
-      )}
+      </div>
     </button>
   );
 }
@@ -757,7 +770,12 @@ function SquadRow({
             <span className="shrink-0 rounded bg-orange-900/70 px-1 py-0.5 text-[9px] font-bold text-orange-400">SUS</span>
           )}
         </div>
-        <p className="truncate text-[11px] text-gray-600">{player.teamName}</p>
+        <div className="flex items-center gap-1">
+          <div className="relative h-3.5 w-3.5 shrink-0">
+            <Image src={`https://images.fotmob.com/image_resources/logo/teamlogo/${player.teamId}.png`} alt="" fill className="object-contain" unoptimized />
+          </div>
+          <p className="truncate text-[11px] text-gray-600">{player.teamName}</p>
+        </div>
       </div>
 
       {/* Fixture */}
@@ -778,7 +796,7 @@ function SquadRow({
 
       {/* Score */}
       <span className={`ml-auto shrink-0 rounded px-2 py-1 text-xs font-bold tabular-nums ring-1 ${tier.bg} ${tier.text} ${tier.ring}`}>
-        {blocked ? '—' : Math.round(sb.total)}
+        {blocked ? '—' : sb.total.toFixed(1)}
       </span>
     </button>
   );
@@ -946,7 +964,7 @@ export default function TourPage() {
 
   // ── Derived state ─────────────────────────────────────────────────────────────
   const mainCount    = mainIds.size;
-  const gkMainCount  = players.filter((p) => mainIds.has(p.id) && p.positionGroup === 'GK').length;
+  const gkMainCount  = players.filter((p) => mainIds.has(p.id) && effectivePositionGroup(p) === 'GK').length;
   const isValid      = mainCount === 11 && gkMainCount === 1;
   // Use per-slot effective scores (with malus) when auto-select has run; raw totals otherwise.
   const estimatedTotal = mainSlots.length === 11
@@ -959,7 +977,7 @@ export default function TourPage() {
 
   const mainPlayers = players
     .filter((p) => mainIds.has(p.id))
-    .sort((a, b) => POSITION_ORDER[a.positionGroup] - POSITION_ORDER[b.positionGroup]);
+    .sort((a, b) => POSITION_ORDER[effectivePositionGroup(a)] - POSITION_ORDER[effectivePositionGroup(b)]);
 
   const canShowTactics = mainSlots.length === 11 && appliedModule !== null;
   // Build a lookup once so the map below is O(1) per entry, not O(n)
@@ -1015,7 +1033,7 @@ export default function TourPage() {
           <StatBadge label="GK" value={`${gkMainCount} / 1`} ok={gkMainCount === 1} />
           {mainCount > 0 && (
             <div className="text-center">
-              <p className="text-lg font-bold tabular-nums text-gray-300">{Math.round(estimatedTotal)}</p>
+              <p className="text-lg font-bold tabular-nums text-gray-300">{estimatedTotal.toFixed(1)}</p>
               <p className="text-[10px] text-gray-500">Est. score</p>
             </div>
           )}
@@ -1152,7 +1170,7 @@ export default function TourPage() {
 
               {POSITION_SECTIONS.map(({ group, label }) => {
                 const groupPlayers = players
-                  .filter((p) => p.positionGroup === group)
+                  .filter((p) => effectivePositionGroup(p) === group)
                   .sort((a, b) => {
                     const rank = (p: EnrichedPlayer) =>
                       mainIds.has(p.id) ? 0 :

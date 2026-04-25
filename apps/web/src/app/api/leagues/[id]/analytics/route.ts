@@ -74,25 +74,31 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     });
   }
 
-  // ── Fetch available CDN stat lists ────────────────────────────────────────────
-  // FotMob's playerData endpoint no longer responds. Only two CDN keys remain
-  // accessible: interception.json (321 players, total via SubStatValue) and
-  // saves.json (~20 GKs, total via SubStatValue). All others return 403.
+  // ── Fetch available CDN stat lists (try all; empty Map returned on 403) ─────
   if (seasonId) {
-    const [interceptionsMap, savesMap] = await Promise.all([
-      getLeagueStatsListCached(leagueId, seasonId, 'interception', { ...opts, useSubStatValue: true }).catch(() => new Map<number, number>()),
-      getLeagueStatsListCached(leagueId, seasonId, 'saves', { ...opts, useSubStatValue: true }).catch(() => new Map<number, number>()),
+    const noMap = () => new Map<number, number>();
+    const subStat = (key: string) =>
+      getLeagueStatsListCached(leagueId, seasonId!, key, { ...opts, useSubStatValue: true }).catch(noMap);
+    const stdStat = (key: string) =>
+      getLeagueStatsListCached(leagueId, seasonId!, key, opts).catch(noMap);
+
+    const [
+      interceptionsMap, savesMap,
+      cleanSheetsMap, goalsConcededMap,
+      xGMap, shotsMap, keyPassesMap,
+    ] = await Promise.all([
+      subStat('interception'), subStat('saves'),
+      subStat('cleansheet'),   subStat('goalsconceded'),
+      stdStat('expectedgoals'), stdStat('shots'), stdStat('keypasses'),
     ]);
 
-    interceptionsMap.forEach((value, id) => {
-      const s = allStats.get(id);
-      if (s) s.interceptions = value;
-    });
-
-    savesMap.forEach((value, id) => {
-      const s = allStats.get(id);
-      if (s) s.saves = value;
-    });
+    interceptionsMap.forEach((v, id) => { const s = allStats.get(id); if (s) s.interceptions  = v; });
+    savesMap.forEach(        (v, id) => { const s = allStats.get(id); if (s) s.saves           = v; });
+    cleanSheetsMap.forEach(  (v, id) => { const s = allStats.get(id); if (s) s.cleanSheets     = v; });
+    goalsConcededMap.forEach((v, id) => { const s = allStats.get(id); if (s) s.goalsConceded   = v; });
+    xGMap.forEach(           (v, id) => { const s = allStats.get(id); if (s) s.expectedGoals   = v; });
+    shotsMap.forEach(        (v, id) => { const s = allStats.get(id); if (s) s.shots            = v; });
+    keyPassesMap.forEach(    (v, id) => { const s = allStats.get(id); if (s) s.chancesCreated  = v; });
   }
 
   const players: PlayerAnalytics[] = saved.players.map((p) => {

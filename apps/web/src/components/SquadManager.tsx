@@ -328,7 +328,12 @@ function SquadListItem({ player, onRemove }: { player: SquadPlayer; onRemove: ()
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-xs font-semibold text-white">{player.name}</p>
-        <p className="text-xs text-gray-600">{player.positionGroup} · {player.teamName}</p>
+        <div className="flex items-center gap-1">
+          <div className="relative h-3.5 w-3.5 shrink-0">
+            <Image src={`https://images.fotmob.com/image_resources/logo/teamlogo/${player.teamId}.png`} alt="" fill className="object-contain" unoptimized />
+          </div>
+          <p className="text-xs text-gray-600">{player.positionGroup} · {player.teamName}</p>
+        </div>
         {player.injured && (
           <p className="mt-0.5 text-xs font-semibold text-red-400">
             {injury ? injury.name : 'Injured'}
@@ -373,43 +378,55 @@ function PlayerCard({
   }, [player.id, player.injured]);
 
   return (
-    <div className={`flex flex-col items-center gap-2.5 rounded-xl border p-3 text-center transition ${
+    <div className={`flex flex-col overflow-hidden rounded-xl border transition ${
       inSquad
         ? 'border-green-700/40 bg-green-950/20'
         : 'border-white/8 bg-gray-900 hover:border-white/20'
     }`}>
-      <div className="relative h-14 w-14 overflow-hidden rounded-full bg-gray-800 ring-2 ring-white/5">
-        <Image src={player.imageUrl} alt={player.name} fill className="object-cover" unoptimized />
-      </div>
-      <div className="w-full min-w-0">
-        <p className="truncate text-xs font-semibold text-white">{player.name}</p>
-        <p className="text-xs text-gray-600">
-          {player.shirtNumber != null ? `#${player.shirtNumber} · ` : ''}{player.positionLabel}
-        </p>
+      {/* Portrait image */}
+      <div className="relative h-32 w-full bg-gray-800">
+        <Image src={player.imageUrl} alt={player.name} fill className="object-contain" unoptimized />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/60 to-transparent" />
         {player.injured && (
-          <div className="mt-1.5 rounded-lg border border-red-500/20 bg-red-950/30 px-2 py-1">
-            <p className="text-xs font-semibold text-red-400">
-              {injury ? injury.name : 'Injured'}
-            </p>
-            {injury && isInjuryToday(injury) ? (
-              <p className="text-xs font-semibold text-green-400">Returns today!</p>
-            ) : injury?.expectedReturn ? (
-              <p className="text-xs text-red-300/60">Return: {injury.expectedReturn}</p>
-            ) : null}
-          </div>
+          <div className="absolute left-1.5 top-1.5 rounded bg-red-600/80 px-1 py-0.5 text-[9px] font-bold text-white">INJ</div>
+        )}
+        {inSquad && (
+          <div className="absolute right-1.5 top-1.5 rounded-full bg-green-600/80 px-1.5 py-0.5 text-[9px] font-bold text-white">✓</div>
         )}
       </div>
-      <button
-        onClick={onAdd}
-        disabled={inSquad}
-        className={`w-full rounded-lg py-1.5 text-xs font-semibold transition ${
-          inSquad
-            ? 'bg-green-900/50 text-green-400'
-            : 'bg-white/8 text-white hover:bg-white/15'
-        }`}
-      >
-        {inSquad ? '✓ Added' : '+ Add'}
-      </button>
+
+      {/* Info + add */}
+      <div className="flex flex-col gap-2 p-3 text-center">
+        <div className="min-w-0">
+          <p className="truncate text-xs font-semibold text-white">{player.name}</p>
+          <p className="text-xs text-gray-600">
+            {player.shirtNumber != null ? `#${player.shirtNumber} · ` : ''}{player.positionLabel}
+          </p>
+          {player.injured && (
+            <div className="mt-1.5 rounded-lg border border-red-500/20 bg-red-950/30 px-2 py-1">
+              <p className="text-xs font-semibold text-red-400">
+                {injury ? injury.name : 'Injured'}
+              </p>
+              {injury && isInjuryToday(injury) ? (
+                <p className="text-xs font-semibold text-green-400">Returns today!</p>
+              ) : injury?.expectedReturn ? (
+                <p className="text-xs text-red-300/60">Return: {injury.expectedReturn}</p>
+              ) : null}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={onAdd}
+          disabled={inSquad}
+          className={`w-full rounded-lg py-1.5 text-xs font-semibold transition ${
+            inSquad
+              ? 'bg-green-900/50 text-green-400'
+              : 'bg-white/8 text-white hover:bg-white/15'
+          }`}
+        >
+          {inSquad ? '✓ Added' : '+ Add'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -430,12 +447,12 @@ function PlayersSkeleton() {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
       {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="rounded-xl border border-white/8 bg-gray-900 p-3">
-          <div className="flex flex-col items-center gap-2">
-            <div className="shimmer h-14 w-14 rounded-full" />
-            <div className="shimmer h-3 w-20 rounded" />
-            <div className="shimmer h-2.5 w-14 rounded" />
-            <div className="shimmer mt-1 h-7 w-full rounded-lg" />
+        <div key={i} className="overflow-hidden rounded-xl border border-white/8 bg-gray-900">
+          <div className="shimmer h-32 w-full" />
+          <div className="flex flex-col gap-2 p-3">
+            <div className="shimmer mx-auto h-3 w-20 rounded" />
+            <div className="shimmer mx-auto h-2.5 w-14 rounded" />
+            <div className="shimmer h-7 w-full rounded-lg" />
           </div>
         </div>
       ))}

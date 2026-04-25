@@ -32,14 +32,23 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   const db = await getDb();
   const lastUpdated = new Date().toISOString();
 
-  // Mark as healed: suppresses FotMob data too
+  // Mark as healed: suppresses FotMob data, stores cleared flag
   if (body.cleared) {
     await db.collection('player_injuries').updateOne(
       { playerId },
       { $set: { playerId, cleared: true, lastUpdated } },
       { upsert: true },
     );
-    return NextResponse.json({ ok: true, injury: null });
+    await evictInjuryCache(playerId);
+    const clearedInfo: PlayerInjuryInfo = {
+      name: 'Manually healed',
+      expectedReturn: null,
+      expectedReturnDate: null,
+      lastUpdated,
+      overridden: true,
+      cleared: true,
+    };
+    return NextResponse.json({ ok: true, injury: clearedInfo });
   }
 
   if (!body.name?.trim()) {
