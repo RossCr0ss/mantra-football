@@ -1,0 +1,27 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: mantra-mongo
+    ports:
+      - "27028:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: mantra-football
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: mantra-web
+    ports:
+      - "3002:3001"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/mantra-football
+      - NODE_ENV=production
+      - PORT=3001
+    depends_on:
+      - mongo
+
+volumes:
+  mongo_data:
