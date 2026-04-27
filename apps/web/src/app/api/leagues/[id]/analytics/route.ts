@@ -8,6 +8,7 @@ import {
   getLeagueRatingStatsCached,
   getLeagueSeasonIdCached,
   getLeagueStatsListCached,
+  getPlayerSeasonStatsCached,
 } from '@/lib/fotmobCache';
 import { getCachedAt } from '@/lib/mongoCache';
 import type { FotMobTeam, PlayerSeasonStats } from '@/lib/fotmob';
@@ -76,29 +77,34 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   // ── Fetch available CDN stat lists (try all; empty Map returned on 403) ─────
   if (seasonId) {
-    const noMap = () => new Map<number, number>();
     const subStat = (key: string) =>
-      getLeagueStatsListCached(leagueId, seasonId!, key, { ...opts, useSubStatValue: true }).catch(noMap);
-    const stdStat = (key: string) =>
-      getLeagueStatsListCached(leagueId, seasonId!, key, opts).catch(noMap);
+      getLeagueStatsListCached(leagueId, seasonId!, key, { ...opts, useSubStatValue: true })
+        .catch(() => new Map<number, number>());
 
-    const [
-      interceptionsMap, savesMap,
-      cleanSheetsMap, goalsConcededMap,
-      xGMap, shotsMap, keyPassesMap,
-    ] = await Promise.all([
-      subStat('interception'), subStat('saves'),
-      subStat('cleansheet'),   subStat('goalsconceded'),
-      stdStat('expectedgoals'), stdStat('shots'), stdStat('keypasses'),
+    const [interceptionsMap, savesMap] = await Promise.all([
+      subStat('interception'),
+      subStat('saves'),
     ]);
 
-    interceptionsMap.forEach((v, id) => { const s = allStats.get(id); if (s) s.interceptions  = v; });
-    savesMap.forEach(        (v, id) => { const s = allStats.get(id); if (s) s.saves           = v; });
-    cleanSheetsMap.forEach(  (v, id) => { const s = allStats.get(id); if (s) s.cleanSheets     = v; });
-    goalsConcededMap.forEach((v, id) => { const s = allStats.get(id); if (s) s.goalsConceded   = v; });
-    xGMap.forEach(           (v, id) => { const s = allStats.get(id); if (s) s.expectedGoals   = v; });
-    shotsMap.forEach(        (v, id) => { const s = allStats.get(id); if (s) s.shots            = v; });
-    keyPassesMap.forEach(    (v, id) => { const s = allStats.get(id); if (s) s.chancesCreated  = v; });
+    interceptionsMap.forEach((v, id) => { const s = allStats.get(id); if (s) s.interceptions = v; });
+    savesMap.forEach(        (v, id) => { const s = allStats.get(id); if (s) s.saves          = v; });
+  }
+
+  // ── Enrich with full per-player stats from playerData (requires FOTMOB_COOKIE) ─
+  if (process.env.FOTMOB_COOKIE) {
+    const enrichResults = await Promise.allSettled(
+      saved.players.map((p) => getPlayerSeasonStatsCached(p.id, opts)),
+    );
+    saved.players.forEach((p, i) => {
+      const r = enrichResults[i];
+      if (r.status !== 'fulfilled') return;
+      const detail = r.value;
+      const existing = allStats.get(p.id);
+      if (!existing) return;
+      for (const [k, v] of Object.entries(detail)) {
+        if (v != null) (existing as unknown as Record<string, unknown>)[k] = v;
+      }
+    });
   }
 
   const players: PlayerAnalytics[] = saved.players.map((p) => {
@@ -122,11 +128,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       yellowCards:           s?.yellowCards         ?? 0,
       redCards:              s?.redCards            ?? 0,
       leagueRank:            s?.leagueRank          ?? null,
-      matchesPlayed:         s?.matchesPlayed       ?? null,
-      minutesPlayed:         s?.minutesPlayed       ?? null,
-      cleanSheets:           s?.cleanSheets         ?? null,
-      saves:                 s?.saves               ?? null,
-      goalsConceded:         s?.goalsConceded       ?? null,
+      matchesPlayed:         s?.matchesPlayed       ?? 0,
+      minutesPlayed:         s?.minutesPlayed       ?? 0,
+      cleanSheets:           s?.cleanSheets         ?? 0,
+      saves:                 s?.saves               ?? 0,
+      goalsConceded:         s?.goalsConceded       ?? 0,
       savePercentage:        s?.savePercentage      ?? null,
       goalsPrevented:        s?.goalsPrevented      ?? null,
       penaltySaves:          s?.penaltySaves        ?? null,
