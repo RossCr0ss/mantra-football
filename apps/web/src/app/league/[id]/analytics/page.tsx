@@ -5,7 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { LEAGUES } from '@/lib/fotmob';
-import type { PlayerRecentMatch, PlayerRichStats, PlayerStatItem } from '@/lib/fotmob';
+import type { PlayerRecentMatch } from '@/lib/fotmob';
 import { MANTRA_POSITIONS } from '@/lib/mantraPositions';
 import Breadcrumbs from '@/components/Breadcrumbs';
 import LeagueNav from '@/components/LeagueNav';
@@ -216,6 +216,130 @@ const STAT_TITLES: Record<string, string> = {
   BCM: 'Big Chances Missed', Drb: 'Successful Dribbles',
 };
 
+// ─── Radar chart ──────────────────────────────────────────────────────────────
+
+const RADAR_CONFIG: Record<string, Array<{ key: keyof PlayerAnalytics; label: string; negative?: boolean }>> = {
+  GK:  [
+    { key: 'saves',         label: 'SV'  },
+    { key: 'cleanSheets',   label: 'CS'  },
+    { key: 'goalsConceded', label: 'GC',  negative: true },
+    { key: 'matchesPlayed', label: 'MP'  },
+    { key: 'foulsCommitted',label: 'FC',  negative: true },
+  ],
+  DEF: [
+    { key: 'tackles',       label: 'Tk'  },
+    { key: 'interceptions', label: 'Int' },
+    { key: 'clearances',    label: 'Clr' },
+    { key: 'cleanSheets',   label: 'CS'  },
+    { key: 'goals',         label: 'G'   },
+  ],
+  MID: [
+    { key: 'chancesCreated',label: 'KP'  },
+    { key: 'expectedGoals', label: 'xG'  },
+    { key: 'goals',         label: 'G'   },
+    { key: 'assists',       label: 'A'   },
+    { key: 'tackles',       label: 'Tk'  },
+  ],
+  FWD: [
+    { key: 'goals',         label: 'G'   },
+    { key: 'expectedGoals', label: 'xG'  },
+    { key: 'shots',         label: 'Sh'  },
+    { key: 'assists',       label: 'A'   },
+    { key: 'chancesCreated',label: 'KP'  },
+  ],
+};
+
+const RADAR_PALETTE: Record<string, { stroke: string; fill: string; dot: string }> = {
+  GK:  { stroke: '#facc15', fill: 'rgba(250,204,21,0.15)',  dot: '#facc15' },
+  DEF: { stroke: '#38bdf8', fill: 'rgba(56,189,248,0.15)',  dot: '#38bdf8' },
+  MID: { stroke: '#34d399', fill: 'rgba(52,211,153,0.15)',  dot: '#34d399' },
+  FWD: { stroke: '#fb923c', fill: 'rgba(251,146,60,0.15)',  dot: '#fb923c' },
+};
+
+function RadarChart({
+  player,
+  group,
+  maxima,
+}: {
+  player: PlayerAnalytics;
+  group: string;
+  maxima: Record<string, number>;
+}) {
+  const axes = RADAR_CONFIG[group];
+  if (!axes) return null;
+  const n = axes.length;
+  const R = 32;
+  const cx = 50;
+  const cy = 50;
+  const palette = RADAR_PALETTE[group] ?? RADAR_PALETTE.MID;
+
+  function coord(idx: number, radius: number): [number, number] {
+    const a = ((360 / n) * idx - 90) * (Math.PI / 180);
+    return [cx + radius * Math.cos(a), cy + radius * Math.sin(a)];
+  }
+  function fmtCoord(c: [number, number]): string {
+    return `${c[0].toFixed(2)},${c[1].toFixed(2)}`;
+  }
+
+  const values = axes.map((ax) => {
+    const raw = (player[ax.key] as number | null) ?? 0;
+    const max = maxima[ax.key] ?? 1;
+    const norm = max > 0 ? Math.min(1, raw / max) : 0;
+    return ax.negative ? Math.max(0, 1 - norm) : norm;
+  });
+
+  const hasData = axes.some((ax) => ((player[ax.key] as number | null) ?? 0) > 0);
+  const polyPts = values.map((v, i) => fmtCoord(coord(i, Math.max(0.03, v) * R))).join(' ');
+
+  return (
+    <div className="relative w-full" style={{ paddingBottom: '100%' }}>
+      <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full">
+        {/* Grid rings */}
+        {[0.25, 0.5, 0.75, 1].map((lvl) => (
+          <polygon
+            key={lvl}
+            points={Array.from({ length: n }, (_, i) => fmtCoord(coord(i, lvl * R))).join(' ')}
+            fill="none"
+            stroke="rgba(255,255,255,0.07)"
+            strokeWidth="0.5"
+          />
+        ))}
+        {/* Axis spokes */}
+        {axes.map((_, i) => {
+          const [x2, y2] = coord(i, R);
+          return <line key={i} x1={cx} y1={cy} x2={x2.toFixed(2)} y2={y2.toFixed(2)}
+            stroke="rgba(255,255,255,0.07)" strokeWidth="0.5" />;
+        })}
+        {/* Player polygon */}
+        {hasData && (
+          <>
+            <polygon points={polyPts} fill={palette.fill} stroke={palette.stroke}
+              strokeWidth="1.2" strokeLinejoin="round" />
+            {values.map((v, i) => {
+              const [x, y] = coord(i, Math.max(0.03, v) * R);
+              return <circle key={i} cx={x.toFixed(2)} cy={y.toFixed(2)} r="1.8" fill={palette.dot} />;
+            })}
+          </>
+        )}
+        {/* Axis labels */}
+        {axes.map((ax, i) => {
+          const [lx, ly] = coord(i, R + 12);
+          const raw = player[ax.key] as number | null;
+          const rawStr = raw === null ? '—'
+            : ax.key === 'expectedGoals' ? raw.toFixed(1)
+            : String(raw);
+          return (
+            <text key={i} fontSize="5" textAnchor="middle">
+              <tspan x={lx.toFixed(2)} y={(ly - 2.5).toFixed(2)} fill="rgba(255,255,255,0.35)">{ax.label}</tspan>
+              <tspan x={lx.toFixed(2)} dy="6" fill={palette.stroke} fontWeight="bold">{rawStr}</tspan>
+            </text>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 // ─── Card stat components ─────────────────────────────────────────────────────
 
 interface StatCell {
@@ -274,111 +398,6 @@ function AdditionalStats({ cells }: { cells: StatCell[] }) {
   );
 }
 
-// ─── Rich stat visualization ──────────────────────────────────────────────────
-
-/** Stats where a lower value (lower percentile) is better for the player. */
-const NEGATIVE_STAT_IDS = new Set([
-  'yellow_cards', 'red_cards', 'fouls', 'dispossessed',
-  'dribbled_past', 'goals_conceded_while_on_pitch',
-  'expected_goals_against_while_on_pitch',
-]);
-
-function percentileClasses(pct: number, isNegative: boolean): string {
-  const effective = isNegative ? 100 - pct : pct;
-  if (effective >= 80) return 'bg-emerald-500 text-emerald-400';
-  if (effective >= 60) return 'bg-yellow-500 text-yellow-400';
-  if (effective >= 40) return 'bg-orange-500 text-orange-400';
-  return 'bg-red-500 text-red-400';
-}
-
-function StatRow({ item }: { item: PlayerStatItem }) {
-  const pct = Math.round(item.percentileRank);
-  const isNeg = NEGATIVE_STAT_IDS.has(item.localizedTitleId);
-  const cls = percentileClasses(pct, isNeg);
-  const [barCls, textCls] = cls.split(' ');
-
-  return (
-    <div className="flex items-center gap-2">
-      <span className="w-36 shrink-0 truncate text-[11px] text-gray-400" title={item.title}>{item.title}</span>
-      <span className="w-10 shrink-0 text-right text-[11px] font-semibold tabular-nums text-white">
-        {item.statFormat === 'percent' ? `${item.statValue}%` : item.statValue}
-      </span>
-      <div className="relative flex-1 h-1.5 overflow-hidden rounded-full bg-gray-800">
-        <div className={`h-full rounded-full ${barCls}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className={`w-8 shrink-0 text-right text-[10px] tabular-nums ${textCls}`}>{pct}</span>
-    </div>
-  );
-}
-
-function RichStatsPanel({ playerId }: { playerId: number }) {
-  const [stats, setStats]       = useState<PlayerRichStats | null>(null);
-  const [loading, setLoading]   = useState(true);
-  const [activeGroup, setActive] = useState(0);
-
-  useEffect(() => {
-    setLoading(true);
-    setStats(null);
-    setActive(0);
-    fetch(`/api/players/${playerId}/stats`)
-      .then((r) => r.json())
-      .then((d) => setStats(d.stats ?? null))
-      .catch(() => null)
-      .finally(() => setLoading(false));
-  }, [playerId]);
-
-  if (loading) {
-    return (
-      <div className="space-y-2 rounded-xl border border-white/8 bg-gray-950 p-3">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <div className="shimmer h-2.5 w-28 rounded" />
-            <div className="shimmer ml-auto h-2.5 w-8 rounded" />
-            <div className="shimmer h-1.5 flex-1 rounded-full" />
-            <div className="shimmer h-2 w-6 rounded" />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  if (!stats || stats.groups.length === 0) {
-    return (
-      <div className="rounded-xl border border-white/8 bg-gray-950 px-3 py-4 text-center text-xs text-gray-600">
-        Positional stats temporarily unavailable
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-xl border border-white/8 bg-gray-950 p-3 space-y-3">
-      {/* Group tabs */}
-      <div className="flex flex-wrap gap-1">
-        {stats.groups.map((g, i) => (
-          <button
-            key={g.localizedTitleId}
-            onClick={() => setActive(i)}
-            className={`rounded-lg px-2 py-1 text-[10px] font-semibold transition ${
-              activeGroup === i
-                ? 'bg-white/15 text-white'
-                : 'text-gray-600 hover:text-gray-300'
-            }`}
-          >
-            {g.title}
-          </button>
-        ))}
-      </div>
-
-      {/* Stat rows */}
-      <div className="space-y-1.5">
-        {stats.groups[activeGroup]?.items.map((item) => (
-          <StatRow key={item.localizedTitleId} item={item} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // ─── Analytics card ───────────────────────────────────────────────────────────
 
 function AnalyticsCard({
@@ -386,11 +405,13 @@ function AnalyticsCard({
   rank,
   form,
   formLoading,
+  maxima,
 }: {
   player: PlayerAnalytics;
   rank: number;
   form: PlayerRecentMatch[];
   formLoading: boolean;
+  maxima: Record<string, number>;
 }) {
   const [showMatches, setShowMatches] = useState(false);
   const pg = player.positionGroup;
@@ -534,11 +555,16 @@ function AnalyticsCard({
       {/* Recent match details (expandable) */}
       {showMatches && hasFormData && <RecentMatchesList matches={form} />}
 
-      {/* Primary stats */}
-      <PrimaryStats cells={primaryStats} />
-
-      {/* Additional stats */}
-      <AdditionalStats cells={additionalStats} />
+      {/* Stats + Radar side by side */}
+      <div className="flex gap-2 items-start">
+        <div className="w-[38%] shrink-0">
+          <RadarChart player={p} group={pg} maxima={maxima} />
+        </div>
+        <div className="flex-1 flex flex-col gap-1.5 min-w-0">
+          <PrimaryStats cells={primaryStats} />
+          <AdditionalStats cells={additionalStats} />
+        </div>
+      </div>
 
       {/* Footer */}
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600 border-t border-white/5 pt-1.5">
@@ -655,6 +681,21 @@ export default function AnalyticsPage() {
     });
     return list;
   }, [players, sortKey, posFilter]);
+
+  const groupMaxima = useMemo(() => {
+    const result: Record<string, Record<string, number>> = {};
+    for (const group of ['GK', 'DEF', 'MID', 'FWD']) {
+      const gp = players.filter((p) => p.positionGroup === group);
+      const axes = RADAR_CONFIG[group] ?? [];
+      const maxes: Record<string, number> = {};
+      for (const ax of axes) {
+        const vals = gp.map((p) => (p[ax.key] as number | null) ?? 0).filter((v) => v > 0);
+        maxes[ax.key] = vals.length > 0 ? Math.max(...vals) : 1;
+      }
+      result[group] = maxes;
+    }
+    return result;
+  }, [players]);
 
   const rated      = players.filter((p) => p.rating !== null);
   const avgRating  = rated.length ? (rated.reduce((s, p) => s + p.rating!, 0) / rated.length).toFixed(2) : '—';
@@ -788,6 +829,7 @@ export default function AnalyticsPage() {
                     rank={i + 1}
                     form={form[String(player.playerId)] ?? []}
                     formLoading={loadingForm}
+                    maxima={groupMaxima[player.positionGroup] ?? {}}
                   />
                 ))}
               </div>

@@ -106,7 +106,7 @@ The Zustand store (`squadStore.ts`) is used only during the **squad builder** fl
 |---|---|---|
 | `/league/[id]/team` | Server → `TeamSquadView` client | Pre-fetch injuries server-side; client handles status toggles |
 | `/league/[id]/injuries` | Server → `InjuryReportView` client | Pre-fetch all injuries in parallel server-side |
-| `/league/[id]/analytics` | Full client | All data loaded via fetch on mount; needs sort/filter state |
+| `/league/[id]/analytics` | Full client | All data loaded via fetch on mount; sortable table + card view with per-position radar chart |
 | `/league/[id]/fixtures` | Full client | Odds fetched lazily per match on user action |
 | `/league/[id]/tour` | Full client | Complex scoring state; odds needed after initial load |
 
@@ -151,7 +151,8 @@ The tactics view in `tour/page.tsx` uses `max-w-sm sm:max-w-xl md:max-w-2xl` so 
 | `fotmob_players` | `teamId` | Cached squad + basic stats (6h TTL) |
 | `fotmob_stats` | `teamId` | Cached Map<playerId, PlayerSeasonStats> serialised as array (6h TTL) |
 | `fotmob_ratings` | `leagueId, seasonId` | Cached league rating rankings (24h TTL) |
-| `fotmob_stat_list` | `leagueId, seasonId, statKey` | Cached stat lists: cleansheet/saves/xG/shots/keypasses (24h TTL) |
+| `fotmob_all_stats` | `leagueId, seasonId` | All 19 CDN stat categories merged into one doc per league-season (24h TTL) |
+| `fotmob_stat_list` | `leagueId, seasonId, statKey` | Single stat list per key — available for ad-hoc use (24h TTL) |
 | `fotmob_season` | `leagueId` | Cached primary season ID (24h TTL) |
 | `fotmob_odds` | `matchId` | Cached 1×2 odds (30m TTL) |
 | `fixtures_cache` | `leagueId` | League matches + table positions (1h TTL) |

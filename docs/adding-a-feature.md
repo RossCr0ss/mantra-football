@@ -19,35 +19,29 @@ export interface PlayerSeasonStats {
 }
 ```
 
-### Step 2 — Add the stat list fetch
+### Step 2 — Add to `CDN_STAT_CONFIG`
 
-In `fotmob.ts`, no change needed — `fetchLeagueStatsList` is generic. Just call it with the right key.
-
-In `fotmobCache.ts`, add a cached wrapper if you want a dedicated function, or call `getLeagueStatsListCached` directly with the FotMob stat key.
-
-Find the stat key by inspecting `https://data.fotmob.com/stats/{leagueId}/season/{seasonId}/` — try keys like `passaccuracy`, `passes`, etc.
-
-### Step 3 — Populate in the analytics route
-
-In `apps/web/src/app/api/leagues/[id]/analytics/route.ts`:
+In `fotmob.ts`, extend `CDN_STAT_CONFIG` with the correct CDN key:
 
 ```typescript
-const [/* existing */, paMap] = await Promise.all([
-  // existing fetches...
-  getLeagueStatsListCached(leagueId, seasonId, 'passaccuracy'),
-]);
-
-allStats.forEach((s, id) => {
-  // existing assignments...
-  s.passAccuracy = paMap.get(id) ?? null;
-});
+const CDN_STAT_CONFIG = [
+  // ... existing entries ...
+  ['accurate_pass', 'passAccuracy', false],  // StatValue = total
+] as const;
 ```
 
-### Step 4 — Show in the analytics page
+Find the correct key by inspecting `teams.stats.players[].name` from the `/api/data/teams?id=...` endpoint for a team in the target league. Wrong key names silently return 403.
 
-In `apps/web/src/app/league/[id]/analytics/page.tsx`, add a column to the sortable table.
+The field is automatically included the next time `fetchLeagueAllPlayerStats` runs — no changes to the analytics route are needed.
 
-### Step 5 — Use in tour scoring (optional)
+### Step 3 — Add to the analytics page
+
+In `apps/web/src/app/league/[id]/analytics/page.tsx`:
+- Add a `SortKey` entry and a `ColDef` in `COLUMNS` to make it sortable in the table view
+- Add to the relevant `primaryStats` or `additionalStats` in `AnalyticsCard` for the card view
+- Add to `RADAR_CONFIG` for the appropriate position group to show it in the radar chart
+
+### Step 4 — Use in tour scoring (optional)
 
 If the stat should influence auto-select, update `calcScore()` in `apps/web/src/app/league/[id]/tour/page.tsx`.
 

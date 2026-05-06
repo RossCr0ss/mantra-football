@@ -75,9 +75,9 @@ An empty array is treated as a cache miss and triggers a fresh fetch.
 | Key | Value | Collection(s) | Reasoning |
 |---|---|---|---|
 | `TEAMS` | 24h | `fotmob_teams` | Teams change only on transfer window open/close |
-| `PLAYERS` | 6h | `fotmob_players`, `fotmob_stats` | Daily transfers / injuries can affect squad |
+| `PLAYERS` | 6h | `fotmob_players`, `fotmob_stats`, `fotmob_player_stats`, `fotmob_form`, `fotmob_rich_stats` | Daily transfers / injuries can affect squad |
 | `ODDS` | 30m | `fotmob_odds` | Odds shift significantly in the hours before kick-off |
-| `RATINGS` | 24h | `fotmob_ratings`, `fotmob_stat_list` | FotMob updates ratings ~weekly |
+| `RATINGS` | 24h | `fotmob_ratings`, `fotmob_stat_list`, `fotmob_all_stats` | FotMob updates CDN stats ~weekly |
 | `SEASON` | 24h | `fotmob_season` | Primary season ID changes once per season |
 
 ---
@@ -114,7 +114,11 @@ All expensive FotMob calls used in API routes go through this module. It wraps `
 | `getLeagueRatingStatsCached(leagueId, seasonId)` | `fotmob_ratings` | `{ leagueId, seasonId }` | RATINGS 24h |
 | `getLeagueSeasonIdCached(leagueId)` | `fotmob_season` | `{ leagueId }` | SEASON 24h |
 | `getMatchOddsCached(matchId)` | `fotmob_odds` | `{ matchId }` | ODDS 30m |
+| `getLeagueAllPlayerStatsCached(leagueId, seasonId)` | `fotmob_all_stats` | `{ leagueId, seasonId }` | RATINGS 24h |
 | `getLeagueStatsListCached(leagueId, seasonId, statKey)` | `fotmob_stat_list` | `{ leagueId, seasonId, statKey }` | RATINGS 24h |
+| `getPlayerSeasonStatsCached(playerId)` | `fotmob_player_stats` | `{ playerId }` | PLAYERS 6h |
+| `getPlayerFormCached(playerId)` | `fotmob_form` | `{ playerId }` | INJURIES 1h |
+| `getPlayerRichStatsCached(playerId)` | `fotmob_rich_stats` | `{ playerId }` | PLAYERS 6h |
 
 ### Map serialisation
 
@@ -150,6 +154,12 @@ db.fotmob_teams.deleteOne({ leagueId: 441 })
 db.fotmob_season.deleteOne({ leagueId: 441 })
 db.fotmob_ratings.deleteMany({ leagueId: 441 })
 db.fotmob_stat_list.deleteMany({ leagueId: 441 })
+db.fotmob_all_stats.deleteMany({ leagueId: 441 })
+
+// Clear per-player enrichment caches (form, rich stats, player season stats)
+db.fotmob_player_stats.deleteOne({ playerId: 976428 })
+db.fotmob_form.deleteOne({ playerId: 976428 })
+db.fotmob_rich_stats.deleteOne({ playerId: 976428 })
 ```
 
 ---

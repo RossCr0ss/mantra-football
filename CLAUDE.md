@@ -37,7 +37,8 @@ See `docs/fotmob-api.md` for all FotMob endpoint shapes and known quirks.
 | `fetchTeamPlayers(teamId, teamName)` | Squad members with season stats; falls back to `fetchTeamPlayersFromLineup` when `squad.squad` is null |
 | `fetchTeamPlayerStats(teamId, teamName)` | Map of playerId → stats (wraps `fetchTeamPlayers`) |
 | `fetchLeagueRatingStats(leagueId, seasonId)` | League-wide rating ranking (gzipped static JSON from data.fotmob.com) |
-| `fetchLeagueStatsList(leagueId, seasonId, statKey)` | Single stat list from data.fotmob.com (cleansheet, saves, expectedgoals, shots, keypasses) |
+| `fetchLeagueStatsList(leagueId, seasonId, statKey, useSubStatValue?)` | Single CDN stat list — use exact keys from `CDN_STAT_CONFIG`; wrong names return 403 |
+| `fetchLeagueAllPlayerStats(leagueId, seasonId)` | Fetches all 19 CDN stat categories in parallel, merges into `Map<playerId, Partial<PlayerSeasonStats>>` |
 | `fetchLeagueSeasonId(leagueId)` | Primary season ID for a league |
 | `fetchPlayerInjuryInfo(playerId)` | Live injury info from FotMob playerData endpoint |
 | `fetchPlayerRichStats(playerId)` | Full `firstSeasonStats.statsSection` with percentile ranks per stat group (Shooting/Passing/Possession/Defending/Discipline) |
@@ -56,10 +57,13 @@ See `docs/fotmob-api.md` for all FotMob endpoint shapes and known quirks.
 **Critical quirks** — see `docs/fotmob-api.md` for full details:
 - Matches are at `data.fixtures.allMatches` NOT `data.matches`
 - `home.id` / `away.id` are **strings** — always parse with `Number()`
+- Scores are in `status.scoreStr` (e.g. `"2 - 1"`), not `home.score`/`away.score`
 - Belgian Pro League has split table structure (`data.tables[].table.all`)
 - Ukrainian clubs outside Shakhtar/Dynamo have `squad.squad = null` — fallback uses `overview.lastLineupStats`
 - Odds require geo params (server-side); Ukrainian users use `ccode3=UKR&bettingProvider=22Bet_Ukraine`
 - `data.fotmob.com/stats/441/...rating.json` returns 403 for Ukrainian league (only goals.json accessible)
+- `playerData` endpoint returns Turnstile challenge for all server-side requests — use CDN stats instead
+- CDN stat key names are non-obvious — see `CDN_STAT_CONFIG` in `fotmob.ts` for the verified list
 
 ## Supported leagues (LEAGUES constant in fotmob.ts)
 | ID | Name | Country |
@@ -78,7 +82,7 @@ All under `apps/web/src/app/api/`:
 | Route | Method | Description |
 |---|---|---|
 | `/api/leagues/[id]/teams` | GET | League teams from FotMob |
-| `/api/leagues/[id]/analytics` | GET | Season stats for all saved squad players (parallel team fetches + league stat lists) |
+| `/api/leagues/[id]/analytics` | GET | Season stats for all saved squad players — team stats + rating rankings + all 19 CDN stat categories merged via `getLeagueAllPlayerStatsCached` |
 | `/api/leagues/[id]/fixtures` | GET | Upcoming fixture for every team in the squad (uses `fixturesCache`) |
 | `/api/teams/[id]/players` | GET | Team squad from FotMob (`?teamName=` required) |
 | `/api/matches/[id]/odds` | GET | 1×2 decimal odds for a match (MongoDB-cached, 30 min TTL) |
@@ -88,7 +92,7 @@ All under `apps/web/src/app/api/`:
 | `/api/players/[id]/injury` | GET | Injury info (DB override → FotMob fallback) |
 | `/api/players/[id]/injury` | PUT | Manually override injury info in MongoDB (pass `{cleared: true}` to mark healed) |
 | `/api/players/[id]/injury` | DELETE | Delete DB override; returns current live FotMob data |
-| `/api/players/[id]/stats` | GET | Rich season stats with percentile ranks (`PlayerRichStats`) — lazy-fetched per player in analytics |
+| `/api/players/[id]/stats` | GET | Rich season stats with percentile ranks (`PlayerRichStats`) — requires `FOTMOB_COOKIE`; Turnstile-blocked without it |
 
 ## Pages (apps/web/src/app/)
 | Path | Component | Server/Client | Description |
@@ -97,7 +101,7 @@ All under `apps/web/src/app/api/`:
 | `/league/[id]` | `page.tsx` | Server | Squad builder (redirects to `/team` if squad exists) |
 | `/league/[id]/team` | `page.tsx` | Server | Squad view: injury toggles, availability %, position editor |
 | `/league/[id]/injuries` | `page.tsx` | Server → `InjuryReportView` | Injury dashboard: all players with injury/suspension/availability issues |
-| `/league/[id]/analytics` | `page.tsx` | Client | Season stats table, sortable columns |
+| `/league/[id]/analytics` | `page.tsx` | Client | Stats table + card view with per-position pentagon radar chart (normalized vs position-group peers) |
 | `/league/[id]/fixtures` | `page.tsx` | Client | Upcoming fixtures; difficulty badges; on-demand odds |
 | `/league/[id]/tour` | `page.tsx` | Client | Tour squad selector: 11 main + 9 subs, auto-select by scoring algorithm |
 
@@ -117,10 +121,10 @@ All under `apps/web/src/app/api/`:
 | `LeagueMatch` | `apps/web/src/lib/fotmob.ts` | Raw match from `data.fixtures.allMatches` |
 | `TeamFixture` | `apps/web/src/lib/fotmob.ts` | `LeagueMatch` + isHome, opponent, difficulty 1–5, odds |
 | `FixtureOdds` | `apps/web/src/lib/fotmob.ts` | home / draw / away decimal odds |
-| `PlayerSeasonStats` | `apps/web/src/lib/fotmob.ts` | Rating, goals, assists, cards, plus GK (cleanSheets, saves) and MID/FWD (xG, shots, chancesCreated) stats |
+| `PlayerSeasonStats` | `apps/web/src/lib/fotmob.ts` | All season stats: rating, goals, assists, cards, GK (cleanSheets, saves, goalsConceded), DEF (tackles, interceptions, clearances), MID/FWD (xG, shots, chancesCreated, bigChances) — populated from CDN |
 | `PlayerStatItem` | `apps/web/src/lib/fotmob.ts` | Single stat with value, per90, percentileRank (0–100 vs position peers), statFormat |
 | `PlayerStatGroup` | `apps/web/src/lib/fotmob.ts` | Named group of `PlayerStatItem[]` (e.g. "Shooting", "Passing") |
-| `PlayerRichStats` | `apps/web/src/lib/fotmob.ts` | `{ groups: PlayerStatGroup[] }` — from `firstSeasonStats.statsSection`; lazy-fetched in analytics |
+| `PlayerRichStats` | `apps/web/src/lib/fotmob.ts` | `{ groups: PlayerStatGroup[] }` — from `firstSeasonStats.statsSection`; Turnstile-blocked, available via `/api/players/[id]/stats` with `FOTMOB_COOKIE` |
 | `PlayerAnalytics` | `apps/web/src/app/api/leagues/[id]/analytics/route.ts` | PlayerSeasonStats + name, team, position, image |
 
 ### Key SquadPlayer fields

@@ -794,10 +794,27 @@ function SquadRow({
         <span className="hidden sm:block text-[11px] text-gray-700 shrink-0">No fixture</span>
       )}
 
-      {/* Score */}
-      <span className={`ml-auto shrink-0 rounded px-2 py-1 text-xs font-bold tabular-nums ring-1 ${tier.bg} ${tier.text} ${tier.ring}`}>
-        {blocked ? '—' : sb.total.toFixed(1)}
-      </span>
+      {/* Score + breakdown */}
+      <div
+        className="ml-auto shrink-0 flex flex-col items-end gap-0.5"
+        title={blocked ? '' : `Rating ${sb.rating.toFixed(1)} · Fixture ${sb.fixture.toFixed(1)} · Position ${sb.position.toFixed(1)} · Minutes ${sb.minutes.toFixed(1)}`}
+      >
+        <span className={`rounded px-2 py-1 text-xs font-bold tabular-nums ring-1 ${tier.bg} ${tier.text} ${tier.ring}`}>
+          {blocked ? '—' : sb.total.toFixed(1)}
+        </span>
+        {!blocked && sb.total > 0 && (
+          <div className="flex h-1 w-12 overflow-hidden rounded-full gap-px">
+            {[
+              { v: sb.rating,   cls: 'bg-yellow-400' },
+              { v: sb.fixture,  cls: 'bg-blue-400'   },
+              { v: sb.position, cls: 'bg-emerald-400' },
+              { v: sb.minutes,  cls: 'bg-purple-400'  },
+            ].map(({ v, cls }) => (
+              v > 0 ? <div key={cls} className={cls} style={{ flex: v }} /> : null
+            ))}
+          </div>
+        )}
+      </div>
     </button>
   );
 }

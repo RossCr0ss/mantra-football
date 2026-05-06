@@ -52,9 +52,10 @@ Playoff/group leagues (Belgian Pro League):
       "away": { "id": "8456", "name": "Chelsea" },
       "status": {
         "utcTime": "2025-04-20T14:00:00.000Z",
-        "finished": false,
-        "started": false,
-        "cancelled": false
+        "finished": true,
+        "started": true,
+        "cancelled": false,
+        "scoreStr": "2 - 1"
       }
     }],
     "firstUnplayedMatch": {
@@ -63,6 +64,8 @@ Playoff/group leagues (Belgian Pro League):
   }
 }
 ```
+
+**Score parsing:** Scores are in `status.scoreStr` as `"homeGoals - awayGoals"` (e.g. `"2 - 1"`). The old `home.score` / `away.score` fields are no longer populated. `fetchLeagueData` parses `scoreStr` with a fallback to `home.score` for legacy compatibility.
 
 **Quirks:**
 - `home.id` and `away.id` are **strings** — always wrap in `Number()`. Forgetting this causes team ID mismatches when building fixtures.
@@ -118,11 +121,13 @@ These players have no season stats (rating, goals, assists all null/0) since tha
 
 ---
 
-### GET `/api/playerData?id={playerId}`
+### GET `/api/data/playerData?id={playerId}`
 
-Used by: `fetchPlayerInjuryInfo`
+Used by: `fetchPlayerInjuryInfo`, `fetchPlayerSeasonStats`, `fetchPlayerRichStats`
 
-Returns detailed player data including injury information.
+Returns detailed player data including injury information and per-player season stats with percentile ranks.
+
+**Note the path prefix:** `/api/data/playerData`, not `/api/playerData`.
 
 **Injury structure:**
 ```json
@@ -140,7 +145,20 @@ Returns detailed player data including injury information.
 
 If `injuryInformation` is absent or null, the player is not injured. The function returns `null` in that case.
 
-**Note:** This endpoint is accessible server-side via Next.js fetch (ISR). Do not call it client-side — it returns 404/HTML from browsers due to geo-checks.
+**⚠ Cloudflare Turnstile protection:** All server-side requests (Node.js, curl) receive `{"error":"Verification required","code":"TURNSTILE_REQUIRED"}`. This affects `fetchPlayerSeasonStats` and `fetchPlayerRichStats` — those functions will silently fail and their cache wrappers (`fotmob_player_stats`, `fotmob_rich_stats`) will remain empty.
+
+Injury fetching (`fetchPlayerInjuryInfo`) is called from the team page server component and appears to work in some regions/configurations. If it stops working, set `FOTMOB_COOKIE` env var with a valid browser cookie to bypass Turnstile.
+
+**Season stats structure** (from `firstSeasonStats.statsSection`):
+```json
+{
+  "groups": [{
+    "localizedTitleId": "shooting",
+    "title": "Shooting",
+    "items": [{ "localizedTitleId": "goals", "title": "Goals", "statValue": 12, "percentileRank": 92.5 }]
+  }]
+}
+```
 
 ---
 
@@ -205,30 +223,56 @@ Note: `ParticiantId` is intentionally misspelled in the FotMob API (not a typo i
 
 Used by: `fetchLeagueStatsList`
 
-Same CDN host, returns per-player values for a specific stat. Used to populate `PlayerSeasonStats` fields beyond what the team endpoint provides.
+Same CDN host, returns per-player values for a specific stat. Used by `fetchLeagueStatsList` (single key) and `fetchLeagueAllPlayerStats` (all 19 keys in parallel).
 
-**Known stat keys:**
-| Key | Maps to |
-|---|---|
-| `cleansheet` | `cleanSheets` |
-| `saves` | `saves` |
-| `goalsconceded` | `goalsConceded` |
-| `expectedgoals` | `expectedGoals` |
-| `shots` | `shots` |
-| `keypasses` | `chancesCreated` |
+**⚠ Key naming matters:** Keys are not intuitive. Wrong keys silently return 403. The correct names were discovered by inspecting `teams.stats.players[].name` on the teams endpoint.
+
+**All 19 supported stat keys** (`CDN_STAT_CONFIG` in `fotmob.ts`):
+
+| CDN key | `PlayerSeasonStats` field | Use `SubStatValue`? |
+|---|---|---|
+| `goals` | `goals` | no |
+| `goal_assist` | `assists` | no |
+| `mins_played` | `minutesPlayed` | no |
+| `expected_goals` | `expectedGoals` | yes |
+| `ontarget_scoring_att` | `shots` | yes |
+| `total_att_assist` | `chancesCreated` | no |
+| `big_chance_created` | `bigChancesCreated` | yes |
+| `big_chance_missed` | `bigChancesMissed` | yes |
+| `total_tackle` | `tackles` | yes |
+| `interception` | `interceptions` | yes |
+| `effective_clearance` | `clearances` | yes |
+| `outfielder_block` | `blockedShots` | yes |
+| `poss_won_att_3rd` | `possessionWonFinal3rd` | yes |
+| `clean_sheet` | `cleanSheets` | no |
+| `_save_percentage` | `savePercentage` | no (placeholder — may 404) |
+| `saves` | `saves` | yes |
+| `_goals_prevented` | `goalsPrevented` | no (placeholder — may 404) |
+| `goals_conceded` | `goalsConceded` | yes |
+| `fouls` | `foulsCommitted` | yes |
+
+`SubStatValue` = the raw season total. `StatValue` = display value (may be per-game or formatted). Most counting stats (tackles, interceptions, etc.) use `SubStatValue`.
+
+Keys prefixed with `_` (like `_save_percentage`) are placeholders — their actual CDN filenames may differ. These fields may remain `null` for some leagues.
 
 **Structure:**
 ```json
 {
   "TopLists": [{
     "StatList": [
-      { "ParticiantId": 976428, "StatValue": 12 }
+      { "ParticiantId": 976428, "StatValue": 12, "SubStatValue": 15 }
     ]
   }]
 }
 ```
 
-Returns an empty Map (not an error) if the endpoint 404s or 403s.
+Returns an empty Map (not an error) if the endpoint 404s or 403s — this is the normal behaviour for keys that don't exist for a given league.
+
+### `fetchLeagueAllPlayerStats(leagueId, seasonId)`
+
+Fetches all 19 stat keys in parallel and merges them into a single `Map<playerId, Partial<PlayerSeasonStats>>`. This is the preferred way to populate analytics — one cache document per league-season instead of 19 separate documents.
+
+Used by `getLeagueAllPlayerStatsCached` in `fotmobCache.ts`, which stores results in the `fotmob_all_stats` collection.
 
 ---
 
@@ -250,10 +294,13 @@ All image URLs are constructed from IDs — never stored in the database.
 |---|---|---|
 | Matches at `data.fixtures.allMatches` not `data.matches` | No matches loaded | Use `data?.fixtures` key |
 | `home.id` / `away.id` are strings | Team ID mismatches | Always `Number(id)` |
+| Scores in `status.scoreStr` not `home.score`/`away.score` | All form results show null | Parse `"2 - 1"` format; fallback to `home.score` |
 | Belgian Pro League: `tables[].table.all` shape | Empty team list | `extractTableRows()` handles both shapes |
 | LaLiga playoff rounds reset to 1, 2… | Wrong fixture round | Filter `!m.finished` in `buildTeamFixtures` |
 | Ukrainian clubs: `squad.squad = null` | "No players found" | `fetchTeamPlayersFromLineup` fallback |
 | Odds are geo-restricted | 404/block client-side | Server-side only, proxy via `/api/matches/[id]/odds` |
 | Ukrainian rating.json → 403 | No league rank data | Silently returns empty Map; players show `leagueRank: null` |
+| `playerData` endpoint → Turnstile | `fetchPlayerSeasonStats`/`fetchPlayerRichStats` fail | CDN stats (`fotmob_all_stats`) cover most fields; set `FOTMOB_COOKIE` for remainder |
+| Wrong CDN stat key names → 403 | Stats remain null | Use exact keys from `CDN_STAT_CONFIG` — not guessed names |
 | `ParticiantId` is a typo in FotMob API | Code looks like a typo | It's correct — FotMob's field is misspelled |
 | `primarySeasonId` is a number in JSON | Wrong type if used as string | Always `String(seasonId)` when passing to stat endpoints |

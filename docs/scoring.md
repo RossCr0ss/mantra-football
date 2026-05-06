@@ -11,9 +11,19 @@ It ranks each squad player so the auto-select can pick the best XI for a matchda
 | Input | Source | Notes |
 |---|---|---|
 | `player` | `SquadPlayer` from MongoDB | Includes `mantraPositions`, `lineupStatus`, `availabilityPct` |
-| `analytics` | `PlayerAnalytics` from `/api/leagues/[id]/analytics` | Season stats: rating, goals, xG, CS, saves, minutes |
+| `analytics` | `PlayerAnalytics` from `/api/leagues/[id]/analytics` | Season stats from CDN: rating, goals, xG, tackles, CS, saves, minutes, and more |
 | `fix` | `TeamFixture` from `/api/leagues/[id]/fixtures` | Next fixture with difficulty 1–5 |
 | `odds` | `FixtureOdds` from `/api/matches/[id]/odds` | Decimal odds: home/draw/away |
+| `form` | `PlayerRecentMatch[]` from `/api/leagues/[id]/form` | Last 5 team matches (W/D/L + score) — blended with season rating when ≥3 rated matches |
+
+### Analytics data source
+
+`PlayerAnalytics` is assembled in the analytics API route from three sources:
+1. **Team endpoint** (`/api/data/teams`) — rating, goals, assists, yellow/red cards
+2. **Rating rankings** (`data.fotmob.com/stats/.../rating.json`) — leagueRank, matchesPlayed, minutesPlayed
+3. **CDN stat lists** (`fetchLeagueAllPlayerStats`) — tackles, interceptions, clearances, xG, shots, chancesCreated, cleanSheets, saves, goalsConceded, foulsCommitted, and more (19 categories total, fetched in parallel and merged into one cache document)
+
+The `playerData` endpoint (per-player rich stats) is Turnstile-blocked for server-side requests and no longer used in the analytics route.
 
 ---
 
@@ -28,10 +38,15 @@ If `player.lineupStatus === 'injured'` or `'suspended'`, the function immediatel
 ### 1. Rating score (0–∞, typical 0–20)
 
 ```
-ratingScore = max(0, (seasonRating - 6.0) * 18)
+seasonRating = analytics.rating ?? 6.0
+formRating   = average of last 5 match ratings where minutesPlayed > 30 (null if < 3 rated matches)
+blendedRating = formRating != null ? seasonRating * 0.6 + formRating * 0.4 : seasonRating
+ratingScore  = max(0, (blendedRating - 6.0) * 18)
 ```
 
 FotMob ratings run roughly 6.0–8.5. A 7.0 rating = 18 points; 7.5 = 27 points; 8.0 = 36 points. Players with no rating data default to 6.0 (zero points).
+
+**Form blend:** The form data from `/api/leagues/[id]/form` is derived from the fixtures cache (team results) and does not include individual player ratings (`rating: null`). The 40% form weight therefore only activates if `fetchPlayerRecentMatches` (Turnstile-blocked) has previously populated per-match ratings for that player. In practice the blend is currently always 100% season rating.
 
 ### 2. Fixture score (0–16)
 
@@ -76,26 +91,36 @@ When the player has > 3 matches played and `cleanSheets` data is available, actu
 
 **DEF:**
 ```
-positionScore = csProb * csBonus * 10 + goalsPerMatch * goalBonus * 6 + assistsPerMatch * 4
+defContrib = tackles/MP * 0.8 + interceptions/MP * 1.0 + clearances/MP * 0.4
+           + blockedShots/MP * 0.8 + possessionWonFinal3rd/MP * 0.5
+           + aerialsWon/MP * 0.4 - dribbledPast/MP * 0.5 - foulsCommitted/MP * 0.25
+positionScore = csProb * csBonus * 10 + goalsPerMatch * goalBonus * 6
+              + assistsPerMatch * 4 + defContrib
 ```
 
 `csBonus`: RB/CB/LB = 1.0, WB/DM = 0.5 (Mantra clean sheet bonus by position).
 `goalBonus`: ST primary = 2, FW primary = 2.5, others = 3 (Mantra goal point value by position).
 
+All per-match defensive stats (`tackles`, `interceptions`, `clearances`, `blockedShots`, `possessionWonFinal3rd`, `foulsCommitted`) are now populated from the CDN. `aerialsWon` and `dribbledPast` are not available from CDN and default to 0.
+
 **MID:**
 ```
 xgPerMatch = expectedGoals / matchesPlayed   (or goals/played if xG unavailable)
-shotsPerMatch = shots / matchesPlayed
 kpPerMatch = chancesCreated / matchesPlayed  (or assists/played if chancesCreated unavailable)
-positionScore = xgPerMatch * goalBonus * 7 + kpPerMatch * 5 + shotsPerMatch * 0.15
+defContrib = tackles/MP * 0.4 + interceptions/MP * 0.6
+positionScore = xgPerMatch * goalBonus * 7 + kpPerMatch * 5 + shots/MP * 0.15
+              + bigChancesCreated/MP * 4 + successfulDribbles/MP * 0.3 + defContrib
 ```
 
 **FWD:**
 ```
-positionScore = xgPerMatch * goalBonus * 10 + assistsPerMatch * 5 + shotsPerMatch * 0.25
+positionScore = xgPerMatch * goalBonus * 10 + assistsPerMatch * 5
+              + shots/MP * 0.25 + bigChancesCreated/MP * 2
+              + successfulDribbles/MP * 0.4 + aerialsWon/MP * 0.3
+              - bigChancesMissed/MP * 2.0
 ```
 
-FWD gets higher xG weight than MID because forwards convert more consistently.
+FWD gets higher xG weight than MID because forwards convert more consistently. `successfulDribbles` and `aerialsWon` are not available from CDN; `bigChancesCreated`, `bigChancesMissed`, `shots`, `chancesCreated`, `expectedGoals` are all populated from CDN.
 
 ### 5. Minutes score (0–10)
 
@@ -217,6 +242,31 @@ Always the highest-scoring available (non-blocked) GK. Slot 0 in every module.
 Without it, a greedy fill might consume the squad's only RB in a flexible `WB/RB` slot, forcing the dedicated `RB` slot to use an out-of-position player. Processing the most-constrained slot first ensures scarce players go to the slots that need them.
 
 ---
+
+## Score breakdown display
+
+The `ScoreBreakdown` interface tracks each component separately:
+
+```typescript
+interface ScoreBreakdown {
+  total: number;
+  baseRating: number;  // blended season+form rating (e.g. 7.2)
+  rating: number;      // ratingScore component
+  fixture: number;     // fixtureScore component
+  odds: number;        // oddsScore component
+  position: number;    // positionScore component
+  minutes: number;     // minutesScore component
+  availability: number; // availabilityPct (0–100)
+}
+```
+
+In the Tour page, each `SquadRow` card shows:
+- **Score badge** with the total score coloured by tier
+- **Micro-bar** (4-segment) below the badge showing the proportion from each component:
+  - Yellow = rating, Blue = fixture, Green = position stats, Purple = minutes
+- **Hover tooltip** listing all four components numerically, e.g. `Rating 12.3 · Fixture 8.0 · Position 4.5 · Minutes 7.0`
+
+The breakdown is display-only — `autoSelect()` uses `total` only.
 
 ## Tuning the weights
 
