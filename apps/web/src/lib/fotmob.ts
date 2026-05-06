@@ -115,10 +115,16 @@ export async function fetchTeamPlayerStats(
 }
 
 /**
- * Fetches a league-wide stat list (e.g. cleansheet, saves, expectedgoals) from
- * the data.fotmob.com static JSON endpoints. Returns a map of playerId → value.
+ * Fetches a single league-wide stat list from data.fotmob.com.
+ * Returns a map of playerId → value.
  *
- * Known stat keys: cleansheet, saves, goalsconceded, expectedgoals, shots, keypasses
+ * FotMob stat key naming: use the exact keys from teams?.stats.players[].name
+ * (e.g. "total_tackle", "effective_clearance", "clean_sheet", "expected_goals").
+ *
+ * StatValue vs SubStatValue semantics differ by stat:
+ *   - Counting stats (tackles, interceptions, saves …) → SubStatValue = season total
+ *   - Primary-display stats (goals, key passes, CS, xG …) → StatValue = season total
+ *   useSubStatValue controls which to prefer (falls back to the other if null).
  */
 export async function fetchLeagueStatsList(
   leagueId: number,
@@ -131,10 +137,7 @@ export async function fetchLeagueStatsList(
       `https://data.fotmob.com/stats/${leagueId}/season/${seasonId}/${statKey}.json`,
       { headers: { ...FOTMOB_HEADERS, 'Accept-Encoding': 'gzip' }, cache: 'no-store' },
     );
-    if (!res.ok) {
-      console.warn(`[fotmob] CDN stat "${statKey}" league=${leagueId}: HTTP ${res.status}`);
-      return new Map();
-    }
+    if (!res.ok) return new Map();
     const data = await res.json() as {
       TopLists?: { StatList?: { ParticiantId?: number; StatValue?: number; SubStatValue?: number }[] }[]
     };
@@ -142,21 +145,80 @@ export async function fetchLeagueStatsList(
     const map = new Map<number, number>();
     for (const entry of list) {
       if (entry.ParticiantId != null) {
-        // SubStatValue = total count (e.g. total interceptions / total saves)
-        // StatValue = per-90 or per-game rate
         const value = useSubStatValue
           ? (entry.SubStatValue ?? entry.StatValue)
           : (entry.StatValue ?? entry.SubStatValue);
-        if (value != null) {
-          map.set(entry.ParticiantId, value);
-        }
+        if (value != null) map.set(entry.ParticiantId, value);
       }
     }
-    console.log(`[fotmob] CDN stat "${statKey}" league=${leagueId}: ${map.size} entries`);
     return map;
   } catch {
     return new Map();
   }
+}
+
+/**
+ * Maps each accessible CDN stat key to a PlayerSeasonStats field.
+ * Tuple: [cdnKey, field, useSubStatValue]
+ *
+ * StatValue vs SubStatValue per stat (determined empirically):
+ *   - Defensive counting stats (tackles/interceptions/clearances/saves…) →
+ *     SubStatValue = season total, StatValue = per-90 rate  → useSubStat: true
+ *   - Primary display stats (goals/assists/key-passes/CS/xG…) →
+ *     StatValue = season total, SubStatValue = secondary    → useSubStat: false
+ *   - Percentages (_save_percentage) → StatValue = %       → useSubStat: false
+ */
+const CDN_STAT_CONFIG: ReadonlyArray<readonly [string, keyof PlayerSeasonStats, boolean]> = [
+  ['goals',                'goals',                 false],
+  ['goal_assist',          'assists',               false],
+  ['mins_played',          'minutesPlayed',         false],
+  ['expected_goals',       'expectedGoals',         true ],  // SubStat = total xG
+  ['ontarget_scoring_att', 'shots',                 true ],  // SubStat = total shots on target
+  ['total_att_assist',     'chancesCreated',        false],  // StatValue = total key passes
+  ['big_chance_created',   'bigChancesCreated',     true ],
+  ['big_chance_missed',    'bigChancesMissed',      true ],
+  ['total_tackle',         'tackles',               true ],
+  ['interception',         'interceptions',         true ],
+  ['effective_clearance',  'clearances',            true ],
+  ['outfielder_block',     'blockedShots',          true ],
+  ['poss_won_att_3rd',     'possessionWonFinal3rd', true ],
+  ['clean_sheet',          'cleanSheets',           false],  // StatValue = total CS
+  ['_save_percentage',     'savePercentage',        false],  // StatValue = %
+  ['saves',                'saves',                 true ],
+  ['_goals_prevented',     'goalsPrevented',        false],
+  ['goals_conceded',       'goalsConceded',         true ],
+  ['fouls',                'foulsCommitted',        true ],
+] as const;
+
+/**
+ * Fetches all accessible CDN stat lists for a league season in parallel.
+ * Returns a merged map of playerId → partial stats covering all major categories
+ * (goals, assists, xG, shots, tackles, clearances, GK stats, etc.) without
+ * requiring the Turnstile-blocked playerData endpoint.
+ */
+export async function fetchLeagueAllPlayerStats(
+  leagueId: number,
+  seasonId: string,
+): Promise<Map<number, Partial<PlayerSeasonStats>>> {
+  const results = await Promise.allSettled(
+    CDN_STAT_CONFIG.map(([key, , useSubStat]) =>
+      fetchLeagueStatsList(leagueId, seasonId, key, useSubStat),
+    ),
+  );
+
+  const map = new Map<number, Partial<PlayerSeasonStats>>();
+  CDN_STAT_CONFIG.forEach(([, field], i) => {
+    const r = results[i];
+    if (r.status !== 'fulfilled') return;
+    r.value.forEach((value, playerId) => {
+      if (!map.has(playerId)) map.set(playerId, { playerId });
+      const entry = map.get(playerId)!;
+      if ((entry as Record<string, unknown>)[field] == null) {
+        (entry as Record<string, unknown>)[field] = value;
+      }
+    });
+  });
+  return map;
 }
 
 /**

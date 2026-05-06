@@ -7,8 +7,7 @@ import {
   getTeamPlayerStatsCached,
   getLeagueRatingStatsCached,
   getLeagueSeasonIdCached,
-  getLeagueStatsListCached,
-  getPlayerSeasonStatsCached,
+  getLeagueAllPlayerStatsCached,
 } from '@/lib/fotmobCache';
 import { getCachedAt } from '@/lib/mongoCache';
 import type { FotMobTeam, PlayerSeasonStats } from '@/lib/fotmob';
@@ -75,33 +74,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     });
   }
 
-  // ── Fetch available CDN stat lists (try all; empty Map returned on 403) ─────
+  // ── Enrich with full CDN stats (tackles, xG, CS, saves, clearances, etc.) ───
   if (seasonId) {
-    const subStat = (key: string) =>
-      getLeagueStatsListCached(leagueId, seasonId!, key, { ...opts, useSubStatValue: true })
-        .catch(() => new Map<number, number>());
-
-    const [interceptionsMap, savesMap] = await Promise.all([
-      subStat('interception'),
-      subStat('saves'),
-    ]);
-
-    interceptionsMap.forEach((v, id) => { const s = allStats.get(id); if (s) s.interceptions = v; });
-    savesMap.forEach(        (v, id) => { const s = allStats.get(id); if (s) s.saves          = v; });
-  }
-
-  // ── Enrich with full per-player stats from playerData (requires FOTMOB_COOKIE) ─
-  if (process.env.FOTMOB_COOKIE) {
-    const enrichResults = await Promise.allSettled(
-      saved.players.map((p) => getPlayerSeasonStatsCached(p.id, opts)),
-    );
-    saved.players.forEach((p, i) => {
-      const r = enrichResults[i];
-      if (r.status !== 'fulfilled') return;
-      const detail = r.value;
-      const existing = allStats.get(p.id);
+    const cdnStats = await getLeagueAllPlayerStatsCached(leagueId, seasonId, opts);
+    cdnStats.forEach((partial, id) => {
+      const existing = allStats.get(id);
       if (!existing) return;
-      for (const [k, v] of Object.entries(detail)) {
+      for (const [k, v] of Object.entries(partial)) {
         if (v != null) (existing as unknown as Record<string, unknown>)[k] = v;
       }
     });

@@ -7,13 +7,14 @@
  * requests a data refresh.
  *
  * Collection layout:
- *   fotmob_teams      { leagueId, data: FotMobTeam[], cachedAt }
- *   fotmob_players    { teamId,   data: FotMobPlayer[], cachedAt }
- *   fotmob_stats      { teamId,   data: PlayerSeasonStats[], cachedAt }
- *   fotmob_ratings    { leagueId, seasonId, data: RatingEntry[], cachedAt }
- *   fotmob_season     { leagueId, data: string | null, cachedAt }
- *   fotmob_odds       { matchId,  data: FixtureOdds | null, cachedAt }
- *   fotmob_stat_list  { leagueId, seasonId, statKey, data: StatListEntry[], cachedAt }
+ *   fotmob_teams           { leagueId, data: FotMobTeam[], cachedAt }
+ *   fotmob_players         { teamId,   data: FotMobPlayer[], cachedAt }
+ *   fotmob_stats           { teamId,   data: PlayerSeasonStats[], cachedAt }
+ *   fotmob_ratings         { leagueId, seasonId, data: RatingEntry[], cachedAt }
+ *   fotmob_season          { leagueId, data: string | null, cachedAt }
+ *   fotmob_odds            { matchId,  data: FixtureOdds | null, cachedAt }
+ *   fotmob_stat_list       { leagueId, seasonId, statKey, data: StatListEntry[], cachedAt }
+ *   fotmob_all_stats       { leagueId, seasonId, data: AllStatEntry[], cachedAt }
  */
 
 import {
@@ -24,6 +25,7 @@ import {
   fetchLeagueSeasonId,
   fetchMatchOdds,
   fetchLeagueStatsList,
+  fetchLeagueAllPlayerStats,
   fetchPlayerRecentMatches,
   fetchPlayerSeasonStats,
   fetchPlayerRichStats,
@@ -202,7 +204,7 @@ export function getPlayerRichStatsCached(
   );
 }
 
-// ─── League stat lists (cleansheet, saves, xG, etc.) ─────────────────────────
+// ─── League stat lists (single key) ──────────────────────────────────────────
 
 interface StatListEntry { playerId: number; value: number }
 
@@ -224,4 +226,26 @@ export async function getLeagueStatsListCached(
     opts,
   );
   return new Map(rows.map(({ playerId, value }) => [playerId, value]));
+}
+
+// ─── All CDN stats for a league (merged, 19 categories in one cache doc) ─────
+
+interface AllStatEntry { playerId: number; stats: Partial<PlayerSeasonStats> }
+
+export async function getLeagueAllPlayerStatsCached(
+  leagueId: number,
+  seasonId: string,
+  opts?: Opts,
+): Promise<Map<number, Partial<PlayerSeasonStats>>> {
+  const rows = await withCache<AllStatEntry[]>(
+    'fotmob_all_stats',
+    { leagueId, seasonId },
+    CACHE_TTL.RATINGS,
+    async () => {
+      const map = await fetchLeagueAllPlayerStats(leagueId, seasonId);
+      return Array.from(map.entries()).map(([playerId, stats]) => ({ playerId, stats }));
+    },
+    opts,
+  );
+  return new Map(rows.map(({ playerId, stats }) => [playerId, stats]));
 }
