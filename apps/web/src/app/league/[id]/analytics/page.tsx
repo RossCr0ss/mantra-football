@@ -107,6 +107,24 @@ function formatStat(player: PlayerAnalytics, key: SortKey): string {
   return String(v);
 }
 
+// ─── Client cache ─────────────────────────────────────────────────────────────
+
+const CACHE_TTL_MS = 15 * 60 * 1000;
+
+function cacheGet<T>(key: string): T | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const { data, ts } = JSON.parse(raw) as { data: T; ts: number };
+    if (Date.now() - ts > CACHE_TTL_MS) return null;
+    return data;
+  } catch { return null; }
+}
+
+function cacheSet<T>(key: string, data: T): void {
+  try { sessionStorage.setItem(key, JSON.stringify({ data, ts: Date.now() })); } catch {}
+}
+
 // ─── Form components ──────────────────────────────────────────────────────────
 
 function FormDot({
@@ -627,24 +645,42 @@ export default function AnalyticsPage() {
   const updatedLabel = useRelativeTime(dataUpdatedAt);
 
   function loadData(refresh = false) {
-    const analyticsUrl = `/api/leagues/${leagueId}/analytics${refresh ? '?refresh=1' : ''}`;
-    const formUrl      = `/api/leagues/${leagueId}/form${refresh ? '?refresh=1' : ''}`;
+    const anlKey  = `anl_${leagueId}`;
+    const formKey = `form_${leagueId}`;
 
-    if (refresh) setRefreshing(true); else setLoading(true);
-    setLoadingForm(true);
+    const cachedAnl  = !refresh ? cacheGet<{ players: PlayerAnalytics[]; dataUpdatedAt: string | null }>(anlKey)  : null;
+    const cachedForm = !refresh ? cacheGet<Record<string, PlayerRecentMatch[]>>(formKey) : null;
 
-    fetch(analyticsUrl)
-      .then((r) => r.json())
-      .then((d) => {
-        setPlayers(d.players ?? []);
-        setDataUpdatedAt(d.dataUpdatedAt ?? null);
-      })
-      .finally(() => { setLoading(false); setRefreshing(false); });
+    if (cachedAnl) {
+      setPlayers(cachedAnl.players);
+      setDataUpdatedAt(cachedAnl.dataUpdatedAt);
+      setLoading(false);
+      setRefreshing(false);
+    } else {
+      if (refresh) setRefreshing(true); else setLoading(true);
+      fetch(`/api/leagues/${leagueId}/analytics${refresh ? '?refresh=1' : ''}`)
+        .then((r) => r.json())
+        .then((d) => {
+          setPlayers(d.players ?? []);
+          setDataUpdatedAt(d.dataUpdatedAt ?? null);
+          cacheSet(anlKey, { players: d.players ?? [], dataUpdatedAt: d.dataUpdatedAt ?? null });
+        })
+        .finally(() => { setLoading(false); setRefreshing(false); });
+    }
 
-    fetch(formUrl)
-      .then((r) => r.json())
-      .then((d) => setForm(d.form ?? {}))
-      .finally(() => setLoadingForm(false));
+    if (cachedForm) {
+      setForm(cachedForm);
+      setLoadingForm(false);
+    } else {
+      setLoadingForm(true);
+      fetch(`/api/leagues/${leagueId}/form${refresh ? '?refresh=1' : ''}`)
+        .then((r) => r.json())
+        .then((d) => {
+          setForm(d.form ?? {});
+          cacheSet(formKey, d.form ?? {});
+        })
+        .finally(() => setLoadingForm(false));
+    }
   }
 
   useEffect(() => { loadData(); }, [leagueId]); // eslint-disable-line react-hooks/exhaustive-deps

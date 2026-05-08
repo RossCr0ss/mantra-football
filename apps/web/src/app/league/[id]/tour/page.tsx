@@ -50,12 +50,14 @@ interface ScoreBreakdown {
   total: number;
   /** Raw analytics rating (e.g. 7.2) — stored so malus can be applied additively later */
   baseRating: number;
-  /** ratingScore = max(0, (baseRating - 6.0) * 18) */
+  /** ratingScore = max(0, (baseRating - 6.0) * 15) */
   rating: number;
   fixture: number;
   odds: number;
   position: number;
   minutes: number;
+  /** Team form momentum: +4 for winning streak, −4 for losing streak (last 5 matches) */
+  form: number;
   availability: number;
 }
 
@@ -69,22 +71,41 @@ function recentFormRating(form: PlayerRecentMatch[]): number | null {
   return rated.reduce((s, r) => s + r, 0) / rated.length;
 }
 
+interface TeamForm {
+  wins: number;
+  draws: number;
+  losses: number;
+  csRate: number;
+  matches: number;
+}
+
+function computeTeamForm(form: PlayerRecentMatch[]): TeamForm {
+  const recent = form.filter((m) => m.result !== null).slice(0, 5);
+  if (recent.length === 0) return { wins: 0, draws: 0, losses: 0, csRate: 0, matches: 0 };
+  const wins   = recent.filter((m) => m.result === 'W').length;
+  const draws  = recent.filter((m) => m.result === 'D').length;
+  const losses = recent.filter((m) => m.result === 'L').length;
+  const cs     = recent.filter((m) => (m.goalsAgainst ?? 1) === 0).length;
+  return { wins, draws, losses, csRate: cs / recent.length, matches: recent.length };
+}
+
 function calcScore(
   player: SquadPlayer,
   analytics: PlayerAnalytics | null,
   fix: TeamFixture | null,
   odds: FixtureOdds | null,
   form: PlayerRecentMatch[],
+  teamForm: TeamForm,
 ): ScoreBreakdown {
   if (isBlocked(player)) {
-    return { total: -999, baseRating: 6.0, rating: 0, fixture: 0, odds: 0, position: 0, minutes: 0, availability: 0 };
+    return { total: -999, baseRating: 6.0, rating: 0, fixture: 0, odds: 0, position: 0, minutes: 0, form: 0, availability: 0 };
   }
 
   const seasonRating = analytics?.rating ?? 6.0;
   const formRating = recentFormRating(form);
   // Blend: 60% season average + 40% recent form when enough form matches available
   const rating = formRating !== null ? seasonRating * 0.6 + formRating * 0.4 : seasonRating;
-  const ratingScore = Math.max(0, (rating - 6.0) * 18);
+  const ratingScore = Math.max(0, (rating - 6.0) * 15);
 
   const diff = fix?.difficulty ?? 3;
   const fixtureScore = (diff - 1) * 4;
@@ -115,8 +136,12 @@ function calcScore(
   const pm = (v: number | null | undefined): number =>
     hasData && v != null ? v / matchesPlayed : 0;
 
+  // Blend odds-based CS probability with actual team CS rate from recent form
   const baseCsProb = diff * 0.075 - 0.025;
-  const csProb = winProb > 0 ? Math.min(0.55, baseCsProb + winProb * 0.15) : baseCsProb;
+  const csFromOdds = winProb > 0 ? Math.min(0.55, baseCsProb + winProb * 0.15) : baseCsProb;
+  const csProb = teamForm.matches >= 3
+    ? csFromOdds * 0.5 + teamForm.csRate * 0.5
+    : csFromOdds;
 
   let positionScore = 0;
   if (group === 'GK') {
@@ -130,7 +155,7 @@ function calcScore(
     positionScore = effectiveCsProb * csBonus(positions) * 12
       + pm(analytics?.saves) * 0.4
       + svPctBonus
-      + pm(analytics?.goalsPrevented) * 3
+      + pm(analytics?.goalsPrevented) * 5
       + pm(analytics?.highClaims) * 0.4
       - pm(analytics?.goalsConceded) * 0.2;
   } else if (group === 'DEF') {
@@ -152,42 +177,75 @@ function calcScore(
       ? analytics.expectedGoals / matchesPlayed : gpg;
     const kpPerMatch = hasData && analytics?.chancesCreated != null
       ? analytics.chancesCreated / matchesPlayed : apg;
-    // Defensive contribution rewards DMs/CMs; W/AMs naturally have low tackle counts (~0 delta)
-    const defContrib = pm(analytics?.tackles) * 0.4 + pm(analytics?.interceptions) * 0.6;
-    positionScore = xgPerMatch * goalBonus(positions) * 7
-      + kpPerMatch * 5
-      + pm(analytics?.shots) * 0.15
-      + pm(analytics?.bigChancesCreated) * 4
-      + pm(analytics?.successfulDribbles) * 0.3
-      + defContrib;
+    // Split by sub-role: DM values defensive work more; AM/W values creativity more; CM is balanced
+    const isDM    = positions.includes('DM') && !positions.includes('AM') && !positions.includes('W');
+    const isAMorW = positions.includes('AM') || positions.includes('W');
+    if (isDM) {
+      positionScore = xgPerMatch * goalBonus(positions) * 5
+        + kpPerMatch * 3
+        + pm(analytics?.shots) * 0.1
+        + pm(analytics?.bigChancesCreated) * 2
+        + pm(analytics?.successfulDribbles) * 0.2
+        + pm(analytics?.tackles) * 0.8
+        + pm(analytics?.interceptions) * 1.2
+        + pm(analytics?.clearances) * 0.3;
+    } else if (isAMorW) {
+      positionScore = xgPerMatch * goalBonus(positions) * 9
+        + kpPerMatch * 7
+        + pm(analytics?.shots) * 0.2
+        + pm(analytics?.bigChancesCreated) * 5
+        + pm(analytics?.successfulDribbles) * 0.5
+        + pm(analytics?.tackles) * 0.15
+        + pm(analytics?.interceptions) * 0.2;
+    } else {
+      // CM — balanced
+      positionScore = xgPerMatch * goalBonus(positions) * 7
+        + kpPerMatch * 5
+        + pm(analytics?.shots) * 0.15
+        + pm(analytics?.bigChancesCreated) * 4
+        + pm(analytics?.successfulDribbles) * 0.3
+        + pm(analytics?.tackles) * 0.4
+        + pm(analytics?.interceptions) * 0.6;
+    }
   } else {
-    // FWD
+    // FWD — split W (creative wide) vs ST/FW (goal threat)
     const xgPerMatch = hasData && analytics?.expectedGoals != null
       ? analytics.expectedGoals / matchesPlayed : gpg;
-    positionScore = xgPerMatch * goalBonus(positions) * 10
-      + apg * 5
-      + pm(analytics?.shots) * 0.25
-      + pm(analytics?.bigChancesCreated) * 2
-      + pm(analytics?.successfulDribbles) * 0.4
-      + pm(analytics?.aerialsWon) * 0.3
-      - pm(analytics?.bigChancesMissed) * 2.0;
+    const isW = positions.includes('W') && !positions.includes('ST') && !positions.includes('FW');
+    if (isW) {
+      positionScore = xgPerMatch * goalBonus(positions) * 8
+        + pm(analytics?.chancesCreated) * 3
+        + apg * 6
+        + pm(analytics?.shots) * 0.2
+        + pm(analytics?.bigChancesCreated) * 3
+        + pm(analytics?.successfulDribbles) * 0.6
+        - pm(analytics?.bigChancesMissed) * 1.5;
+    } else {
+      positionScore = xgPerMatch * goalBonus(positions) * 10
+        + apg * 5
+        + pm(analytics?.shots) * 0.25
+        + pm(analytics?.bigChancesCreated) * 2
+        + pm(analytics?.successfulDribbles) * 0.4
+        + pm(analytics?.aerialsWon) * 0.3
+        - pm(analytics?.bigChancesMissed) * 2.0;
+    }
   }
 
   const avgMin = matchesPlayed > 0 && analytics?.minutesPlayed
     ? analytics.minutesPlayed / matchesPlayed
     : null;
-  let minutesScore = 0;
-  if (avgMin !== null) {
-    if (avgMin >= 82) minutesScore = 10;
-    else if (avgMin >= 70) minutesScore = 7;
-    else if (avgMin >= 55) minutesScore = 4;
-    else if (avgMin >= 40) minutesScore = 1;
-  }
+  // Linear scale: 90 min avg → 12 pts, capped at 10
+  const minutesScore = avgMin !== null ? Math.round(Math.min(10, (avgMin / 90) * 12)) : 0;
+
+  // Team form momentum: (wins − losses) / matches × 4, range ≈ ±4
+  const formBonus = teamForm.matches >= 3
+    ? ((teamForm.wins - teamForm.losses) / teamForm.matches) * 4
+    : 0;
 
   const noFixturePenalty = fix ? 0 : 25;
 
   const availPct = player.availabilityPct ?? 100;
-  const baseTotal = ratingScore + fixtureScore + oddsScore + positionScore + minutesScore - noFixturePenalty;
+  const baseTotal = ratingScore + fixtureScore + oddsScore + positionScore + minutesScore + formBonus - noFixturePenalty;
   const total = Math.max(0, baseTotal) * (availPct / 100);
 
   return {
@@ -198,6 +256,7 @@ function calcScore(
     odds: oddsScore,
     position: positionScore,
     minutes: minutesScore,
+    form: formBonus,
     availability: availPct,
   };
 }
@@ -220,6 +279,24 @@ function formatDate(dateStr: string) {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return '';
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
+
+// ─── Client cache ─────────────────────────────────────────────────────────────
+
+const CACHE_TTL_MS = 15 * 60 * 1000;
+
+function cacheGet<T>(key: string): T | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const { data, ts } = JSON.parse(raw) as { data: T; ts: number };
+    if (Date.now() - ts > CACHE_TTL_MS) return null;
+    return data;
+  } catch { return null; }
+}
+
+function cacheSet<T>(key: string, data: T): void {
+  try { sessionStorage.setItem(key, JSON.stringify({ data, ts: Date.now() })); } catch {}
 }
 
 const DIFF_STYLE: Record<number, { bg: string; text: string }> = {
@@ -306,7 +383,7 @@ function getSlotPenalty(slotPositions: MantraPosition[], playerPositions: Mantra
 function effectiveScore(breakdown: ScoreBreakdown, pen: number): number {
   if (pen === 0) return breakdown.total;
   const penalizedRating = breakdown.baseRating + pen;
-  const penalizedRatingScore = Math.max(0, (penalizedRating - 6.0) * 18);
+  const penalizedRatingScore = Math.max(0, (penalizedRating - 6.0) * 15);
   const avail = breakdown.availability / 100;
   const ratingDelta = (penalizedRatingScore - breakdown.rating) * avail;
   return Math.max(0, breakdown.total + ratingDelta);
@@ -328,12 +405,21 @@ function enrichPlayers(
   oddsMap: Map<string, FixtureOdds | null>,
   formMap: Map<number, PlayerRecentMatch[]>,
 ): EnrichedPlayer[] {
+  // Aggregate team form from the first available player per team (all share the same match results)
+  const teamFormCache = new Map<number, TeamForm>();
+  for (const p of squad) {
+    if (!teamFormCache.has(p.teamId)) {
+      teamFormCache.set(p.teamId, computeTeamForm(formMap.get(p.id) ?? []));
+    }
+  }
+
   return squad.map((p) => {
     const fix = fixtures[p.teamId]?.[0] ?? null;
     const analytics = analyticsMap.get(p.id) ?? null;
     const odds = fix ? (oddsMap.get(fix.matchId) ?? null) : null;
     const form = formMap.get(p.id) ?? [];
-    return { ...p, nextFixture: fix, analytics, odds, scoreBreakdown: calcScore(p, analytics, fix, odds, form) };
+    const teamForm = teamFormCache.get(p.teamId) ?? { wins: 0, draws: 0, losses: 0, csRate: 0, matches: 0 };
+    return { ...p, nextFixture: fix, analytics, odds, scoreBreakdown: calcScore(p, analytics, fix, odds, form, teamForm) };
   });
 }
 
@@ -630,14 +716,12 @@ function TourSkeleton() {
     <div className="animate-pulse space-y-8">
       <div className="space-y-3">
         <div className="h-5 w-40 rounded bg-gray-700" />
-        <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
+        <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
           {Array.from({ length: 11 }).map((_, i) => (
-            <div key={i} className="overflow-hidden rounded-xl border border-white/8 bg-gray-800">
-              <div className="shimmer aspect-[3/4] w-full" />
-              <div className="flex flex-col gap-1.5 p-2">
-                <div className="shimmer h-3 w-full rounded" />
-                <div className="shimmer h-2.5 w-3/4 rounded" />
-              </div>
+            <div key={i} className="rounded-xl border border-white/8 bg-gray-900 flex flex-col items-center gap-1.5 p-2.5">
+              <div className="shimmer h-11 w-11 rounded-full" />
+              <div className="shimmer h-2.5 w-14 rounded" />
+              <div className="shimmer h-2 w-10 rounded" />
             </div>
           ))}
         </div>
@@ -662,7 +746,7 @@ function TourSkeleton() {
   );
 }
 
-// ─── Starting XI card (prominent) ────────────────────────────────────────────
+// ─── Starting XI card (compact) ──────────────────────────────────────────────
 
 function MainCard({ player, onRemove }: { player: EnrichedPlayer; onRemove: () => void }) {
   const fix = player.nextFixture;
@@ -670,46 +754,40 @@ function MainCard({ player, onRemove }: { player: EnrichedPlayer; onRemove: () =
   const ds = diff !== null ? (DIFF_STYLE[diff] ?? DIFF_STYLE[3]) : null;
   const sb = player.scoreBreakdown;
   const tier = scoreTier(sb.total);
+  const colors = GROUP_COLORS[effectivePositionGroup(player)];
 
   return (
     <button
       onClick={onRemove}
       title="Click to remove from Starting XI"
-      className="group relative flex flex-col overflow-hidden rounded-xl border border-white/20 bg-gray-900 text-left ring-1 ring-white/8 transition hover:border-red-500/40"
+      className="group relative flex flex-col items-center gap-1.5 overflow-hidden rounded-xl border border-white/10 bg-gray-900 px-2 py-2.5 text-center transition hover:border-red-500/30 hover:bg-red-950/10"
     >
-      {/* Portrait image area */}
-      <div className="relative aspect-[3/4] w-full bg-gray-800">
-        {ds && <div className={`absolute inset-x-0 top-0 z-10 h-0.5 ${ds.bg}`} />}
-        <Image src={player.imageUrl} alt={player.name} fill className="object-contain transition-transform duration-300 group-hover:scale-105" unoptimized />
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/80 to-transparent" />
-        <span className={`absolute bottom-1.5 left-1.5 z-10 rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums ring-1 ${tier.bg} ${tier.text} ${tier.ring}`}>
-          {sb.total.toFixed(1)}
-        </span>
-        <div className="absolute bottom-1.5 right-1.5 z-10 h-5 w-5">
-          <Image src={`https://images.fotmob.com/image_resources/logo/teamlogo/${player.teamId}.png`} alt="" fill className="object-contain" unoptimized />
-        </div>
-        <div className="absolute inset-0 flex items-center justify-center bg-red-600/0 transition-colors duration-200 group-hover:bg-red-600/50">
-          <span className="text-xl font-bold text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100">✕</span>
+      {/* Score chip */}
+      <span className={`absolute top-1.5 left-1.5 rounded px-1 text-[8px] font-bold tabular-nums ring-1 ${tier.bg} ${tier.text} ${tier.ring}`}>
+        {sb.total.toFixed(1)}
+      </span>
+
+      {/* Avatar + remove overlay */}
+      <div className={`relative h-11 w-11 overflow-hidden rounded-full bg-gray-700 ring-2 transition group-hover:ring-red-400 ${colors.ring}`}>
+        <Image src={player.imageUrl} alt={player.name} fill className="object-cover" unoptimized />
+        <div className="absolute inset-0 flex items-center justify-center bg-red-600/0 transition group-hover:bg-red-600/80">
+          <span className="text-xs font-bold text-white opacity-0 transition group-hover:opacity-100">✕</span>
         </div>
       </div>
 
-      {/* Info row */}
-      <div className="flex flex-col gap-1 px-2 py-1.5">
-        <p className="truncate text-[11px] font-semibold leading-tight text-white">{player.name}</p>
-        <div className="flex flex-wrap items-center gap-0.5">
-          {player.mantraPositions.slice(0, 2).map((pos) => (
-            <span key={pos} className="rounded bg-white/10 px-1 py-0.5 text-[8px] font-bold text-gray-300">
-              {pos}
-            </span>
-          ))}
-          {fix && ds ? (
-            <span className={`ml-auto rounded px-1 py-0.5 text-[8px] font-semibold ${ds.bg} ${ds.text}`}>
-              {fix.isHome ? 'vs' : '@'} {fix.opponent.name.split(' ')[0]}
-            </span>
-          ) : (
-            <span className="ml-auto text-[8px] text-gray-700">No fix</span>
-          )}
-        </div>
+      {/* Name */}
+      <p className="max-w-full truncate text-[10px] font-semibold leading-none text-white">
+        {player.name.split(' ').pop()}
+      </p>
+
+      {/* Position + fixture difficulty badge */}
+      <div className="flex items-center justify-center gap-0.5">
+        {player.mantraPositions.slice(0, 1).map((pos) => (
+          <span key={pos} className="rounded bg-white/8 px-1 py-px text-[7px] font-bold text-gray-500">{pos}</span>
+        ))}
+        {ds && (
+          <span className={`rounded px-1 py-px text-[7px] font-bold ${ds.bg} ${ds.text}`}>{diff}</span>
+        )}
       </div>
     </button>
   );
@@ -797,7 +875,7 @@ function SquadRow({
       {/* Score + breakdown */}
       <div
         className="ml-auto shrink-0 flex flex-col items-end gap-0.5"
-        title={blocked ? '' : `Rating ${sb.rating.toFixed(1)} · Fixture ${sb.fixture.toFixed(1)} · Position ${sb.position.toFixed(1)} · Minutes ${sb.minutes.toFixed(1)}`}
+        title={blocked ? '' : `Rating ${sb.rating.toFixed(1)} · Fixture ${sb.fixture.toFixed(1)} · Position ${sb.position.toFixed(1)} · Minutes ${sb.minutes.toFixed(1)} · Form ${sb.form.toFixed(1)}`}
       >
         <span className={`rounded px-2 py-1 text-xs font-bold tabular-nums ring-1 ${tier.bg} ${tier.text} ${tier.ring}`}>
           {blocked ? '—' : sb.total.toFixed(1)}
@@ -809,6 +887,7 @@ function SquadRow({
               { v: sb.fixture,  cls: 'bg-blue-400'   },
               { v: sb.position, cls: 'bg-emerald-400' },
               { v: sb.minutes,  cls: 'bg-purple-400'  },
+              { v: sb.form,     cls: 'bg-teal-400'    },
             ].map(({ v, cls }) => (
               v > 0 ? <div key={cls} className={cls} style={{ flex: v }} /> : null
             ))}
@@ -856,6 +935,8 @@ export default function TourPage() {
   const [oddsMap, setOddsMap]       = useState<Map<string, FixtureOdds | null>>(new Map());
   const [formMap, setFormMap]       = useState<Map<number, PlayerRecentMatch[]>>(new Map());
   const [squad, setSquad]           = useState<SquadPlayer[]>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     if (squad.length === 0) return;
@@ -878,10 +959,30 @@ export default function TourPage() {
   }, [selectedModule]);
 
   useEffect(() => {
+    setLoadingMain(true);
+    if (refreshKey > 0) setRefreshing(true);
+
+    const anlKey  = `anl_${leagueId}`;
+    const fixKey  = `fix_${leagueId}`;
+    const formKey = `form_${leagueId}`;
+
+    const cachedAnl = cacheGet<{ players: PlayerAnalytics[] }>(anlKey);
+    const cachedFix = cacheGet<{ fixtures: Record<number, TeamFixture[]> }>(fixKey);
+
     Promise.all([
       fetch(`/api/squad?leagueId=${leagueId}`).then((r) => r.json()),
-      fetch(`/api/leagues/${leagueId}/fixtures`).then((r) => r.json()),
-      fetch(`/api/leagues/${leagueId}/analytics`).then((r) => r.json()),
+      cachedFix
+        ? Promise.resolve(cachedFix)
+        : fetch(`/api/leagues/${leagueId}/fixtures`).then((r) => r.json()).then((d) => {
+            cacheSet(fixKey, { fixtures: d.fixtures ?? {} });
+            return d;
+          }),
+      cachedAnl
+        ? Promise.resolve(cachedAnl)
+        : fetch(`/api/leagues/${leagueId}/analytics`).then((r) => r.json()).then((d) => {
+            cacheSet(anlKey, { players: d.players ?? [], dataUpdatedAt: d.dataUpdatedAt ?? null });
+            return d;
+          }),
     ]).then(([squadData, fixtureData, analyticsData]) => {
       const loadedSquad: SquadPlayer[] = squadData.players ?? [];
       const loadedFixtures: Record<number, TeamFixture[]> = fixtureData.fixtures ?? {};
@@ -893,8 +994,8 @@ export default function TourPage() {
       setSquad(loadedSquad);
       setFixtures(loadedFixtures);
       setAnalyticsMap(aMap);
-
       setLoadingMain(false);
+      setRefreshing(false);
 
       const uniqueMatchIds = Array.from(
         new Set(Object.values(loadedFixtures).flat().map((f) => f.matchId)),
@@ -912,18 +1013,28 @@ export default function TourPage() {
           .finally(() => setLoadingOdds(false));
       }
 
-      fetch(`/api/leagues/${leagueId}/form`)
-        .then((r) => r.json())
-        .then((d) => {
-          const fMap = new Map<number, PlayerRecentMatch[]>();
-          for (const [k, v] of Object.entries(d.form ?? {})) {
-            fMap.set(Number(k), v as PlayerRecentMatch[]);
-          }
-          setFormMap(fMap);
-        })
-        .catch(() => {});
-    }).catch(() => setLoadingMain(false));
-  }, [leagueId]);
+      const cachedForm = cacheGet<Record<string, PlayerRecentMatch[]>>(formKey);
+      if (cachedForm) {
+        const fMap = new Map<number, PlayerRecentMatch[]>();
+        for (const [k, v] of Object.entries(cachedForm)) {
+          fMap.set(Number(k), v as PlayerRecentMatch[]);
+        }
+        setFormMap(fMap);
+      } else {
+        fetch(`/api/leagues/${leagueId}/form`)
+          .then((r) => r.json())
+          .then((d) => {
+            cacheSet(formKey, d.form ?? {});
+            const fMap = new Map<number, PlayerRecentMatch[]>();
+            for (const [k, v] of Object.entries(d.form ?? {})) {
+              fMap.set(Number(k), v as PlayerRecentMatch[]);
+            }
+            setFormMap(fMap);
+          })
+          .catch(() => {});
+      }
+    }).catch(() => { setLoadingMain(false); setRefreshing(false); });
+  }, [leagueId, refreshKey]);
 
   // ── Auto-select ───────────────────────────────────────────────────────────────
   function autoSelect() {
@@ -963,6 +1074,16 @@ export default function TourPage() {
       setMainSlotsPenalty(penalty);
       setViewMode('tactics');
     });
+  }
+
+  function refreshData() {
+    try {
+      sessionStorage.removeItem(`anl_${leagueId}`);
+      sessionStorage.removeItem(`fix_${leagueId}`);
+      sessionStorage.removeItem(`form_${leagueId}`);
+    } catch {}
+    autoSelectedRef.current = false;
+    setRefreshKey((k) => k + 1);
   }
 
   function togglePlayer(playerId: number) {
@@ -1030,16 +1151,28 @@ export default function TourPage() {
               <h1 className="text-2xl font-bold text-white">Tour Selector</h1>
             </div>
           </div>
-          <button
-            onClick={autoSelect}
-            disabled={loadingMain || players.length === 0}
-            className="flex items-center gap-2 rounded-xl bg-white px-5 py-2 text-sm font-semibold text-gray-900 transition hover:bg-gray-200 disabled:opacity-40"
-          >
-            {isCalculating && (
-              <span className="h-3.5 w-3.5 rounded-full border-2 border-gray-400 border-t-gray-900 animate-spin" />
-            )}
-            Auto-select
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={autoSelect}
+              disabled={loadingMain || players.length === 0}
+              className="flex items-center gap-2 rounded-xl bg-white px-5 py-2 text-sm font-semibold text-gray-900 transition hover:bg-gray-200 disabled:opacity-40"
+            >
+              {isCalculating && (
+                <span className="h-3.5 w-3.5 rounded-full border-2 border-gray-400 border-t-gray-900 animate-spin" />
+              )}
+              Auto-select
+            </button>
+            <button
+              onClick={refreshData}
+              disabled={loadingMain || refreshing}
+              className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-gray-800 px-3 py-2 text-xs font-semibold text-gray-300 transition hover:bg-gray-700 hover:text-white disabled:opacity-40"
+            >
+              {refreshing && (
+                <span className="h-3 w-3 rounded-full border-2 border-gray-500 border-t-white animate-spin" />
+              )}
+              Refresh
+            </button>
+          </div>
         </div>
 
         {/* Status bar */}
@@ -1163,8 +1296,10 @@ export default function TourPage() {
                   ))}
                   {/* Empty slot placeholders */}
                   {mainCount < 11 && Array.from({ length: 11 - mainCount }).map((_, i) => (
-                    <div key={`empty-${i}`} className="rounded-xl border border-dashed border-white/8 bg-transparent py-8 flex items-center justify-center">
-                      <span className="text-xs text-gray-700">+</span>
+                    <div key={`empty-${i}`} className="flex flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-white/8 bg-transparent py-4">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-full border border-dashed border-white/10">
+                        <span className="text-xs text-gray-700">+</span>
+                      </div>
                     </div>
                   ))}
                 </div>
