@@ -27,6 +27,7 @@ See `docs/architecture.md` for the full system overview and design decisions.
 - MongoDB TTL cache: `apps/web/src/lib/mongoCache.ts` + `apps/web/src/lib/fotmobCache.ts` — wrap all expensive FotMob calls. See `docs/cache.md`.
 - Fixtures cache: `apps/web/src/lib/fixturesCache.ts` — separate cache with 1-hour TTL for league matches + table positions.
 - Injury overrides are stored in the `player_injuries` MongoDB collection (keyed by `playerId`). Use `getPlayerInjury()` from `apps/web/src/lib/injuries.ts` — it prefers DB overrides over live FotMob data.
+- MantraFootball.org wrapper: `apps/web/src/lib/mantraFootball.ts` + cache `apps/web/src/lib/mantraFootballCache.ts` — source of truth for `mantraPositions` (replaces the `guessMantraPositions` heuristic). See `docs/mantrafootball-api.md`.
 
 See `docs/fotmob-api.md` for all FotMob endpoint shapes and known quirks.
 
@@ -76,6 +77,21 @@ See `docs/fotmob-api.md` for all FotMob endpoint shapes and known quirks.
 
 **LaLiga note:** After round 30, playoff rounds reset to roundName 1, 2… — `buildTeamFixtures` filters `!m.finished` to avoid collisions with regular-season round 1.
 
+## MantraFootball.org integration (apps/web/src/lib/mantraFootball.ts)
+mantrafootball.org is the actual fantasy game this app supports, and publishes the official position assignment for every real player, free and with no login. See `docs/mantrafootball-api.md` for full endpoint shapes and quirks.
+
+| Function | Description |
+|---|---|
+| `resolveMantraLeagueId(tournamentId)` | Resolves a stable tournament id to a currently-active, season-scoped `league_id` (changes every season) |
+| `fetchMantraTournamentPlayers(tournamentId)` | Paginates `/api/players` for the whole tournament → `MantraPlayer[]` with official `positions` (`position_classic_arr`, same code space as `MantraPosition`) |
+| `mantraLogin(email, password)` | Devise form login (`/users/sign_in`) — returns a session cookie string, or null. Not persisted by this function. |
+| `fetchMantraTeamRoster(teamId, sessionCookie)` | Parses the server-rendered `/teams/{id}` HTML (cheerio) — no JSON API for this. Returns `MantraRosterPlayer[]` (mantraId, lastName, firstName, positions), deduped (the page renders each row twice, desktop + mobile). |
+
+- `MANTRA_TOURNAMENT_ID` maps our `LEAGUES` ids to mantrafootball's stable tournament ids: 47→2 (England), 55→1 (Italy), 40→13 (Belgium), 441→15 (Ukraine), 87→5 (Spain).
+- Player matching between FotMob and mantrafootball (unrelated ID spaces) uses `matchMantraPlayer()` in `apps/web/src/lib/nameMatch.ts` — fuzzy name + club similarity, no exact key.
+- `SquadManager.tsx` uses matched positions at add-time (falls back to `guessMantraPositions` on no match); `TeamSquadView.tsx` has a "Sync positions from MantraFootball" button to backfill/correct an already-saved squad.
+- Importing an existing mantrafootball squad: `SquadManager.tsx` has an inline login form (posts to `/api/mantra-auth/login`) + team-id import panel. **No env vars / server-side credentials** — the mantrafootball.org session is kept as an `httpOnly` cookie (`mantra_session`) on our own domain; the password itself is never stored.
+
 ## API routes (Next.js App Router)
 All under `apps/web/src/app/api/`:
 
@@ -84,6 +100,11 @@ All under `apps/web/src/app/api/`:
 | `/api/leagues/[id]/teams` | GET | League teams from FotMob |
 | `/api/leagues/[id]/analytics` | GET | Season stats for all saved squad players — team stats + rating rankings + all 19 CDN stat categories merged via `getLeagueAllPlayerStatsCached` |
 | `/api/leagues/[id]/fixtures` | GET | Upcoming fixture for every team in the squad (uses `fixturesCache`) |
+| `/api/leagues/[id]/mantra-positions` | GET | All tournament players with official Mantra positions from mantrafootball.org (MongoDB-cached, 1h TTL) |
+| `/api/leagues/[id]/mantra-import` | POST | Import a mantrafootball squad by team id → matched `SquadPlayer[]` preview (not saved) + unmatched names. Requires `mantra_session` cookie. Returns 409 if the team's roster is from a past season (not renewed yet) rather than silently importing stale data. |
+| `/api/mantra-auth/login` | GET | `{ authenticated: boolean }` — whether the `mantra_session` cookie is set |
+| `/api/mantra-auth/login` | POST | `{ email, password }` → logs into mantrafootball.org, sets `mantra_session` httpOnly cookie (12h) |
+| `/api/mantra-auth/login` | DELETE | Clears the `mantra_session` cookie |
 | `/api/teams/[id]/players` | GET | Team squad from FotMob (`?teamName=` required) |
 | `/api/matches/[id]/odds` | GET | 1×2 decimal odds for a match (MongoDB-cached, 30 min TTL) |
 | `/api/squad` | GET | Read saved squad from MongoDB (`?leagueId=`) |
@@ -126,6 +147,7 @@ All under `apps/web/src/app/api/`:
 | `PlayerStatGroup` | `apps/web/src/lib/fotmob.ts` | Named group of `PlayerStatItem[]` (e.g. "Shooting", "Passing") |
 | `PlayerRichStats` | `apps/web/src/lib/fotmob.ts` | `{ groups: PlayerStatGroup[] }` — from `firstSeasonStats.statsSection`; Turnstile-blocked, available via `/api/players/[id]/stats` with `FOTMOB_COOKIE` |
 | `PlayerAnalytics` | `apps/web/src/app/api/leagues/[id]/analytics/route.ts` | PlayerSeasonStats + name, team, position, image |
+| `MantraPlayer` | `apps/web/src/lib/mantraFootball.ts` | mantrafootball.org player: `{ id, fullName, clubName, positions }` — used for fuzzy-matching against `SquadPlayer`/`FotMobPlayer` |
 
 ### Key SquadPlayer fields
 ```typescript

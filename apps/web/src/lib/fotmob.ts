@@ -704,9 +704,19 @@ export interface PlayerRecentMatch {
   assists: number;
   yellowCard: boolean;
   redCard: boolean;
+  leagueId: number;
+  /** true if in the starting XI (playedInMatch && !onBench) — false for subs, unused subs, and DNPs. */
+  started: boolean;
 }
 
-export async function fetchPlayerRecentMatches(playerId: number): Promise<PlayerRecentMatch[]> {
+/**
+ * Last 5 appearances in the given league only — recentMatches mixes in cup and
+ * international fixtures, so leagueId filters those out before taking the last 5.
+ */
+export async function fetchPlayerRecentMatches(
+  playerId: number,
+  leagueId: number,
+): Promise<PlayerRecentMatch[]> {
   try {
     const res = await fetch(
       `https://www.fotmob.com/api/data/playerData?id=${playerId}`,
@@ -718,6 +728,7 @@ export async function fetchPlayerRecentMatches(playerId: number): Promise<Player
     if (!Array.isArray(raw)) return [];
 
     return raw
+      .filter((m) => Number(m.leagueId ?? 0) === leagueId)
       .slice(-5)
       .map((m): PlayerRecentMatch | null => {
         try {
@@ -772,6 +783,7 @@ export async function fetchPlayerRecentMatches(playerId: number): Promise<Player
           // Cards: yellowCards/redCards (numbers) or yellowCard/redCard (booleans)
           const yellowCard = m.yellowCards != null ? Number(m.yellowCards) > 0 : Boolean(m.yellowCard);
           const redCard    = m.redCards    != null ? Number(m.redCards)    > 0 : Boolean(m.redCard);
+          const started = Boolean(m.playedInMatch) && !Boolean(m.onBench);
 
           return {
             matchId: String(m.id ?? ''),
@@ -788,6 +800,8 @@ export async function fetchPlayerRecentMatches(playerId: number): Promise<Player
             assists: Number(m.assists ?? 0),
             yellowCard,
             redCard,
+            leagueId: Number(m.leagueId ?? 0),
+            started,
           };
         } catch {
           return null;

@@ -37,6 +37,8 @@ export const CACHE_TTL = {
   FIXTURES: { freshMs: 30 *    60_000, staleMs:  6 * 3_600_000  },
   /** Per-player injury data — changes after matches / press conferences */
   INJURIES: { freshMs:  2 * 3_600_000, staleMs: 12 * 3_600_000  },
+  /** mantrafootball.org official position data — rarely changes mid-season */
+  MANTRA_POSITIONS: { freshMs: 3_600_000, staleMs: 24 * 3_600_000 },
 } satisfies Record<string, CacheTTL>;
 
 // ─── Core cache function ──────────────────────────────────────────────────────

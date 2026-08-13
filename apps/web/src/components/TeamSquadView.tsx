@@ -1,14 +1,30 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import type { SquadPlayer, MantraPosition, PositionGroup, LineupStatus } from '@/types/squad';
-import type { PlayerInjuryInfo } from '@/lib/fotmob';
+import type { PlayerInjuryInfo, PlayerRecentMatch, PlayerSeasonStats } from '@/lib/fotmob';
 import {
   MANTRA_POSITIONS,
   MANTRA_POSITION_COLOR,
   type MantraPositionDef,
 } from '@/lib/mantraPositions';
+import { matchMantraPlayer } from '@/lib/nameMatch';
+import type { MantraPlayer } from '@/lib/mantraFootball';
+
+export interface PlayerForm {
+  matches: PlayerRecentMatch[];
+  suggestedPct: number | null;
+  goalsRecent: number;
+  assistsRecent: number;
+  cleanSheetsRecent: number;
+}
+
+function samePositions(a: MantraPosition[], b: MantraPosition[]): boolean {
+  if (a.length !== b.length) return false;
+  const setB = new Set(b);
+  return a.every((p) => setB.has(p));
+}
 
 function pctAccentColor(pct: number): string {
   if (pct === 100) return '#4ade80';
@@ -79,9 +95,13 @@ interface Props {
   initialPlayers: SquadPlayer[];
   injuries: Record<number, PlayerInjuryInfo>;
   primaryColor: string;
+  initialForm?: Record<number, PlayerForm>;
+  seasonStats?: Record<number, PlayerSeasonStats>;
 }
 
-export default function TeamSquadView({ leagueId, initialPlayers, injuries: initialInjuries, primaryColor }: Props) {
+export default function TeamSquadView({
+  leagueId, initialPlayers, injuries: initialInjuries, primaryColor, initialForm, seasonStats,
+}: Props) {
   const [players, setPlayers] = useState(initialPlayers);
   const [injuries, setInjuries] = useState<Record<number, PlayerInjuryInfo>>(initialInjuries);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -104,14 +124,18 @@ export default function TeamSquadView({ leagueId, initialPlayers, injuries: init
     });
   }
 
-  async function setAvailabilityPct(playerId: number, pct: number) {
+  async function setAvailabilityPct(
+    playerId: number,
+    pct: number,
+    source: 'manual' | 'suggested' = 'manual',
+  ) {
     setPlayers((prev) =>
-      prev.map((p) => (p.id === playerId ? { ...p, availabilityPct: pct } : p)),
+      prev.map((p) => (p.id === playerId ? { ...p, availabilityPct: pct, availabilityPctSource: source } : p)),
     );
     await fetch('/api/squad', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leagueId, playerId, availabilityPct: pct }),
+      body: JSON.stringify({ leagueId, playerId, availabilityPct: pct, availabilityPctSource: source }),
     });
   }
 
@@ -202,6 +226,126 @@ export default function TeamSquadView({ leagueId, initialPlayers, injuries: init
       setEditingInjuryId(null);
     } finally {
       setInjuryActionId(null);
+    }
+  }
+
+  const [syncingPositions, setSyncingPositions] = useState(false);
+  const [syncSummary, setSyncSummary] = useState<string | null>(null);
+
+  async function syncMantraPositions() {
+    setSyncingPositions(true);
+    setSyncSummary(null);
+    try {
+      const res = await fetch(`/api/leagues/${leagueId}/mantra-positions`);
+      const data = await res.json();
+      const mantraPlayers: MantraPlayer[] = data.players ?? [];
+
+      let updated = 0;
+      let unmatched = 0;
+      const patches: Promise<unknown>[] = [];
+
+      const nextPlayers = players.map((p) => {
+        const match = matchMantraPlayer({ name: p.name, teamName: p.teamName }, mantraPlayers);
+        if (!match || match.positions.length === 0) {
+          unmatched += 1;
+          return p;
+        }
+        if (samePositions(match.positions, p.mantraPositions)) return p;
+
+        updated += 1;
+        patches.push(
+          fetch('/api/squad', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ leagueId, playerId: p.id, mantraPositions: match.positions }),
+          }),
+        );
+        return { ...p, mantraPositions: match.positions };
+      });
+
+      setPlayers(nextPlayers);
+      await Promise.all(patches);
+      setSyncSummary(`Updated ${updated}${unmatched > 0 ? `, ${unmatched} unmatched` : ''}`);
+    } finally {
+      setSyncingPositions(false);
+    }
+  }
+
+  const [form, setForm] = useState<Record<number, PlayerForm>>(initialForm ?? {});
+  const [updatingForm, setUpdatingForm] = useState(false);
+  const [formSummary, setFormSummary] = useState<string | null>(null);
+
+  async function fetchPlayerForm(player: SquadPlayer): Promise<PlayerForm> {
+    const res = await fetch(
+      `/api/players/${player.id}/form?leagueId=${leagueId}&positionGroup=${player.positionGroup}`,
+    );
+    return res.json();
+  }
+
+  /** Applies suggested Start % for every player whose value isn't manually overridden. */
+  function applyFormResults(entries: { id: number; f: PlayerForm }[]) {
+    const nextForm: Record<number, PlayerForm> = { ...form };
+    let updated = 0;
+    let noData = 0;
+    const patches: Promise<unknown>[] = [];
+
+    const nextPlayers = players.map((p) => {
+      const entry = entries.find((r) => r.id === p.id);
+      if (!entry) return p;
+      nextForm[p.id] = entry.f;
+
+      if (p.availabilityPctSource === 'manual') return p;
+      if (entry.f.suggestedPct == null) { noData += 1; return p; }
+      if (entry.f.suggestedPct === (p.availabilityPct ?? 100) && p.availabilityPctSource === 'suggested') return p;
+
+      updated += 1;
+      patches.push(
+        fetch('/api/squad', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            leagueId, playerId: p.id, availabilityPct: entry.f.suggestedPct, availabilityPctSource: 'suggested',
+          }),
+        }),
+      );
+      return { ...p, availabilityPct: entry.f.suggestedPct, availabilityPctSource: 'suggested' as const };
+    });
+
+    setForm(nextForm);
+    setPlayers(nextPlayers);
+    return { patches, updated, noData };
+  }
+
+  // Apply the server-prefetched suggestions once on load — Start % should reflect
+  // recent form without requiring a manual click every time the page is opened.
+  useEffect(() => {
+    if (!initialForm) return;
+    const entries = Object.entries(initialForm).map(([id, f]) => ({ id: Number(id), f }));
+    const { patches } = applyFormResults(entries);
+    void Promise.all(patches);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function updateStartPercentages() {
+    setUpdatingForm(true);
+    setFormSummary(null);
+    try {
+      const results = await Promise.all(
+        players.map((p) => fetchPlayerForm(p).then((f) => ({ id: p.id, f })).catch(() => null)),
+      );
+      const { patches, updated, noData } = applyFormResults(results.filter((r) => r !== null));
+      await Promise.all(patches);
+      setFormSummary(`Updated ${updated}${noData > 0 ? `, ${noData} no data` : ''}`);
+    } finally {
+      setUpdatingForm(false);
+    }
+  }
+
+  async function resetToAuto(player: SquadPlayer) {
+    const f = form[player.id] ?? (await fetchPlayerForm(player));
+    setForm((prev) => ({ ...prev, [player.id]: f }));
+    if (f.suggestedPct != null) {
+      await setAvailabilityPct(player.id, f.suggestedPct, 'suggested');
     }
   }
 
@@ -391,6 +535,26 @@ export default function TeamSquadView({ leagueId, initialPlayers, injuries: init
         </section>
       )}
 
+      {/* ── Sync positions from MantraFootball / Update Start % from form ── */}
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        {syncSummary && <span className="text-xs text-gray-500">{syncSummary}</span>}
+        <button
+          onClick={syncMantraPositions}
+          disabled={syncingPositions}
+          className="rounded-lg bg-white/5 px-3 py-1.5 text-xs font-semibold text-gray-400 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
+        >
+          {syncingPositions ? 'Syncing…' : 'Sync positions from MantraFootball'}
+        </button>
+        {formSummary && <span className="text-xs text-gray-500">{formSummary}</span>}
+        <button
+          onClick={updateStartPercentages}
+          disabled={updatingForm}
+          className="rounded-lg bg-white/5 px-3 py-1.5 text-xs font-semibold text-gray-400 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
+        >
+          {updatingForm ? 'Updating…' : 'Update Start % from form'}
+        </button>
+      </div>
+
       {/* ── Players by position group ── */}
       {POSITION_SECTIONS.map(({ group, label }) => {
         const groupPlayers = players
@@ -417,11 +581,14 @@ export default function TeamSquadView({ leagueId, initialPlayers, injuries: init
                   key={player.id}
                   player={player}
                   injury={injuries[player.id]}
+                  form={form[player.id]}
+                  seasonStats={seasonStats?.[player.id]}
                   isEditing={editingId === player.id}
                   onEditToggle={() => setEditingId((id) => (id === player.id ? null : player.id))}
                   onTogglePosition={(pos) => togglePosition(player.id, pos)}
                   onToggleStatus={(s) => toggleLineupStatus(player.id, s)}
-                  onSetAvailability={(pct) => setAvailabilityPct(player.id, pct)}
+                  onSetAvailability={(pct) => setAvailabilityPct(player.id, pct, 'manual')}
+                  onResetToAuto={() => resetToAuto(player)}
                 />
               ))}
             </div>
@@ -466,19 +633,25 @@ function SectionHeader({
 function PlayerCard({
   player,
   injury,
+  form,
+  seasonStats,
   isEditing,
   onEditToggle,
   onTogglePosition,
   onToggleStatus,
   onSetAvailability,
+  onResetToAuto,
 }: {
   player: SquadPlayer;
   injury?: PlayerInjuryInfo;
+  form?: PlayerForm;
+  seasonStats?: PlayerSeasonStats;
   isEditing: boolean;
   onEditToggle: () => void;
   onTogglePosition: (pos: MantraPosition) => void;
   onToggleStatus: (s: LineupStatus) => void;
   onSetAvailability: (pct: number) => void;
+  onResetToAuto: () => void;
 }) {
   const [localPct, setLocalPct] = useState<number | null>(null);
   const returning = injury ? isToday(injury) : false;
@@ -539,6 +712,49 @@ function PlayerCard({
         )}
       </div>
 
+      {/* Recent form */}
+      {form && (
+        <div className="flex items-center justify-between gap-1">
+          <div className="flex gap-0.5">
+            {Array.from({ length: 5 }).map((_, i) => {
+              const m = form.matches[form.matches.length - 5 + i];
+              if (!m) return <span key={i} className="h-2 w-2 rounded-full bg-gray-800" />;
+              return (
+                <span
+                  key={i}
+                  title={`vs ${m.opponentName} · ${m.minutesPlayed ?? 0}'`}
+                  className={`h-2 w-2 rounded-full ${m.started ? (m.minutesPlayed ?? 0) >= 60 ? 'bg-green-500' : 'bg-yellow-500' : 'bg-gray-600'}`}
+                />
+              );
+            })}
+          </div>
+          <span className="text-[10px] text-gray-600">
+            {form.matches.length === 0
+              ? 'No recent data'
+              : player.positionGroup === 'GK'
+                ? `${form.cleanSheetsRecent}/${form.matches.length} CS`
+                : `${form.goalsRecent}g ${form.assistsRecent}a`}
+          </span>
+        </div>
+      )}
+
+      {/* Season stats — early in a season most fields are still 0/null until FotMob
+          catches up, so show the row as soon as any one signal is available. */}
+      {seasonStats && (
+        seasonStats.rating != null || seasonStats.matchesPlayed
+          || seasonStats.goals || seasonStats.assists || seasonStats.saves || seasonStats.cleanSheets
+      ) && (
+        <div className="flex items-center justify-between text-[10px] text-gray-600">
+          <span>Season</span>
+          <span className="font-semibold text-gray-400">
+            {seasonStats.rating != null ? seasonStats.rating.toFixed(2) : '–'} rtg
+            {player.positionGroup === 'GK'
+              ? ` · ${seasonStats.saves ?? 0} sv · ${seasonStats.cleanSheets ?? 0} CS`
+              : ` · ${seasonStats.goals ?? 0}g ${seasonStats.assists ?? 0}a`}
+          </span>
+        </div>
+      )}
+
       {/* Injury / healed badge */}
       {injury?.cleared ? (
         <div className="rounded-lg border border-green-500/20 bg-green-950/30 px-2 py-1 text-center">
@@ -582,9 +798,27 @@ function PlayerCard({
           <div className="px-1 pt-1 pb-0.5 space-y-1">
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-gray-600">Start %</span>
-              <span className={`text-xs font-bold tabular-nums ${pctTextClass(displayPct)}`}>
-                {displayPct}%
-              </span>
+              <div className="flex items-center gap-1.5">
+                {player.availabilityPctSource === 'manual' ? (
+                  <button
+                    onClick={onResetToAuto}
+                    title="Manually set — click to reset to the algorithm's suggestion"
+                    className="rounded bg-yellow-600/90 px-1.5 py-0.5 text-[8px] font-bold tracking-wide text-white hover:bg-yellow-500"
+                  >
+                    CUSTOM ↺
+                  </button>
+                ) : player.availabilityPctSource === 'suggested' ? (
+                  <span
+                    title="Calculated automatically from recent-form data"
+                    className="rounded bg-sky-600/80 px-1.5 py-0.5 text-[8px] font-bold tracking-wide text-white"
+                  >
+                    AUTO
+                  </span>
+                ) : null}
+                <span className={`text-xs font-bold tabular-nums ${pctTextClass(displayPct)}`}>
+                  {displayPct}%
+                </span>
+              </div>
             </div>
             <input
               type="range"

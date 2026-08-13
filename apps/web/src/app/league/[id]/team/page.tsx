@@ -6,11 +6,15 @@ import { notFound } from 'next/navigation';
 import { LEAGUES } from '@/lib/fotmob';
 import type { PlayerInjuryInfo } from '@/lib/fotmob';
 import { getPlayerInjuriesBatch } from '@/lib/injuries';
+import { getPlayerFormCached } from '@/lib/fotmobCache';
+import { suggestAvailabilityPct, summarizeRecentForm } from '@/lib/availabilitySuggestion';
+import { getSquadSeasonStats } from '@/lib/squadStats';
 import { getDb } from '@/lib/mongodb';
-import TeamSquadView from '@/components/TeamSquadView';
+import TeamSquadView, { type PlayerForm } from '@/components/TeamSquadView';
 import Breadcrumbs from '@/components/Breadcrumbs';
 import LeagueNav from '@/components/LeagueNav';
 import type { Squad, SquadPlayer, PositionGroup } from '@/types/squad';
+import type { PlayerSeasonStats } from '@/lib/fotmob';
 
 interface Props {
   params: { id: string };
@@ -40,6 +44,22 @@ export default async function TeamPage({ params }: Props) {
   for (const [idStr, info] of Object.entries(injuryMap)) {
     if (info) injuries[Number(idStr)] = info;
   }
+
+  const formEntries = await Promise.all(
+    players.map(async (p) => {
+      const matches = await getPlayerFormCached(p.id, league.id).catch(() => []);
+      const form: PlayerForm = {
+        matches,
+        suggestedPct: suggestAvailabilityPct(matches),
+        ...summarizeRecentForm(matches, p.positionGroup),
+      };
+      return [p.id, form] as const;
+    }),
+  );
+  const initialForm: Record<number, PlayerForm> = Object.fromEntries(formEntries);
+
+  const seasonStatsMap = await getSquadSeasonStats(league.id, players);
+  const seasonStats: Record<number, PlayerSeasonStats> = Object.fromEntries(seasonStatsMap);
 
   return (
     <main className="flex min-h-screen flex-col items-center px-4 py-10 sm:px-6 sm:py-12">
@@ -97,6 +117,8 @@ export default async function TeamPage({ params }: Props) {
               initialPlayers={players}
               injuries={injuries}
               primaryColor={league.primaryColor}
+              initialForm={initialForm}
+              seasonStats={seasonStats}
             />
           </>
         )}

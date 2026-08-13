@@ -8,6 +8,8 @@ import type { SquadPlayer } from '@/types/squad';
 import { SQUAD_RULES } from '@/types/squad';
 import { useSquadStore } from '@/store/squadStore';
 import { guessMantraPositions } from '@/lib/mantraPositions';
+import { matchMantraPlayer } from '@/lib/nameMatch';
+import type { MantraPlayer } from '@/lib/mantraFootball';
 
 function isInjuryToday(info: PlayerInjuryInfo): boolean {
   const dateStr = info.expectedReturnDate ?? info.expectedReturn;
@@ -54,6 +56,7 @@ export default function SquadManager({ leagueId, initialPlayers }: Props) {
   const { squad, setLeagueId, setSquad, addPlayer, removePlayer } = useSquadStore();
 
   const [teams, setTeams] = useState<FotMobTeam[]>([]);
+  const [mantraPlayers, setMantraPlayers] = useState<MantraPlayer[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<FotMobTeam | null>(null);
   const [teamPlayers, setTeamPlayers] = useState<FotMobPlayer[]>([]);
   const [position, setPosition] = useState<Position>('GK');
@@ -62,6 +65,17 @@ export default function SquadManager({ leagueId, initialPlayers }: Props) {
   const [loadingPlayers, setLoadingPlayers] = useState(false);
   const [saving, setSaving] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+
+  const [mantraAuthed, setMantraAuthed] = useState<boolean | null>(null);
+  const [mantraEmail, setMantraEmail] = useState('');
+  const [mantraPassword, setMantraPassword] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  const [mantraTeamId, setMantraTeamId] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importUnmatched, setImportUnmatched] = useState<string[]>([]);
 
   useEffect(() => {
     setLeagueId(leagueId);
@@ -75,6 +89,63 @@ export default function SquadManager({ leagueId, initialPlayers }: Props) {
       .then((d) => setTeams(d.teams ?? []))
       .finally(() => setLoadingTeams(false));
   }, [leagueId]);
+
+  useEffect(() => {
+    fetch(`/api/leagues/${leagueId}/mantra-positions`)
+      .then((r) => r.json())
+      .then((d) => setMantraPlayers(d.players ?? []))
+      .catch(() => setMantraPlayers([]));
+  }, [leagueId]);
+
+  useEffect(() => {
+    fetch('/api/mantra-auth/login')
+      .then((r) => r.json())
+      .then((d) => setMantraAuthed(!!d.authenticated))
+      .catch(() => setMantraAuthed(false));
+  }, []);
+
+  async function handleMantraLogin() {
+    setLoggingIn(true);
+    setLoginError(null);
+    try {
+      const res = await fetch('/api/mantra-auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: mantraEmail, password: mantraPassword }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setLoginError(data.error ?? 'Login failed');
+        return;
+      }
+      setMantraAuthed(true);
+      setMantraPassword('');
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
+  async function handleMantraImport() {
+    setImporting(true);
+    setImportError(null);
+    setImportUnmatched([]);
+    try {
+      const res = await fetch(`/api/leagues/${leagueId}/mantra-import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mantraTeamId: Number(mantraTeamId) }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setImportError(data.error ?? 'Import failed');
+        return;
+      }
+      setSquad(data.players ?? []);
+      setImportUnmatched(data.unmatched ?? []);
+    } finally {
+      setImporting(false);
+    }
+  }
 
   useEffect(() => {
     if (!selectedTeam) return;
@@ -99,6 +170,7 @@ export default function SquadManager({ leagueId, initialPlayers }: Props) {
 
   function handleAdd(p: FotMobPlayer) {
     setValidationError(null);
+    const mantraMatch = matchMantraPlayer({ name: p.name, teamName: p.teamName }, mantraPlayers);
     addPlayer({
       id: p.id,
       name: p.name,
@@ -108,7 +180,9 @@ export default function SquadManager({ leagueId, initialPlayers }: Props) {
       positionGroup: p.position,
       imageUrl: p.imageUrl,
       injured: p.injured,
-      mantraPositions: guessMantraPositions(p.positionLabel, p.position),
+      mantraPositions: mantraMatch?.positions.length
+        ? mantraMatch.positions
+        : guessMantraPositions(p.positionLabel, p.position),
     });
   }
 
@@ -138,6 +212,65 @@ export default function SquadManager({ leagueId, initialPlayers }: Props) {
     <div className="mt-10 grid w-full max-w-6xl grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]">
       {/* ── Left: team selector + player browser ── */}
       <div className="space-y-6 min-w-0">
+        {/* Import from MantraFootball */}
+        <div className="rounded-xl border border-white/8 bg-gray-900 p-4">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-gray-500">
+            Import from MantraFootball
+          </p>
+
+          {mantraAuthed === false ? (
+            <div className="space-y-2">
+              <input
+                type="email"
+                value={mantraEmail}
+                onChange={(e) => setMantraEmail(e.target.value)}
+                placeholder="MantraFootball email"
+                className="w-full rounded-lg border border-white/10 bg-gray-950 px-3 py-2 text-sm text-white placeholder-gray-600 transition focus:border-white/25 focus:outline-none"
+              />
+              <input
+                type="password"
+                value={mantraPassword}
+                onChange={(e) => setMantraPassword(e.target.value)}
+                placeholder="Password"
+                className="w-full rounded-lg border border-white/10 bg-gray-950 px-3 py-2 text-sm text-white placeholder-gray-600 transition focus:border-white/25 focus:outline-none"
+              />
+              {loginError && <p className="text-xs text-red-400">{loginError}</p>}
+              <button
+                onClick={handleMantraLogin}
+                disabled={loggingIn || !mantraEmail || !mantraPassword}
+                className="w-full rounded-lg bg-white/8 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-40"
+              >
+                {loggingIn ? 'Logging in…' : 'Log in'}
+              </button>
+            </div>
+          ) : mantraAuthed === true ? (
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={mantraTeamId}
+                onChange={(e) => setMantraTeamId(e.target.value)}
+                placeholder="Your MantraFootball team id (e.g. 840)"
+                className="w-full rounded-lg border border-white/10 bg-gray-950 px-3 py-2 text-sm text-white placeholder-gray-600 transition focus:border-white/25 focus:outline-none"
+              />
+              {importError && <p className="text-xs text-red-400">{importError}</p>}
+              {importUnmatched.length > 0 && (
+                <p className="text-xs text-yellow-400">
+                  {importUnmatched.length} unmatched — add manually: {importUnmatched.join(', ')}
+                </p>
+              )}
+              <button
+                onClick={handleMantraImport}
+                disabled={importing || !mantraTeamId}
+                className="w-full rounded-lg bg-white/8 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-40"
+              >
+                {importing ? 'Importing…' : 'Import squad'}
+              </button>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-600">Checking login status…</p>
+          )}
+        </div>
+
         {/* Team selector */}
         <div>
           <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-gray-500">

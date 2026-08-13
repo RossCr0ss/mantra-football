@@ -58,6 +58,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
             assists: 0,
             yellowCard: false,
             redCard: false,
+            leagueId,
+            started: false,
           };
         });
       teamFormCache.set(p.teamId, last5);

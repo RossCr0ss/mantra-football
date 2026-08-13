@@ -38,8 +38,9 @@ export async function PATCH(req: NextRequest) {
     mantraPositions?: MantraPosition[];
     lineupStatus?: LineupStatus | null;
     availabilityPct?: number;
+    availabilityPctSource?: 'manual' | 'suggested';
   };
-  const { leagueId, playerId, mantraPositions, lineupStatus, availabilityPct } = body;
+  const { leagueId, playerId, mantraPositions, lineupStatus, availabilityPct, availabilityPctSource } = body;
 
   if (!leagueId || !playerId) {
     return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });
@@ -60,6 +61,9 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid availabilityPct' }, { status: 400 });
     }
     $set['players.$.availabilityPct'] = availabilityPct;
+  }
+  if (availabilityPctSource !== undefined) {
+    $set['players.$.availabilityPctSource'] = availabilityPctSource;
   }
 
   const db = await getDb();

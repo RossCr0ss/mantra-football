@@ -26,6 +26,8 @@ export interface SquadPlayer {
   lineupStatus?: LineupStatus;
   /** Expected playing time as % (0–100). 100 = certain full-match starter. Default: 100. */
   availabilityPct?: number;
+  /** Whether availabilityPct was hand-set or algorithm-suggested from recent form. Undefined = never touched. */
+  availabilityPctSource?: 'manual' | 'suggested';
 }
 
 export interface Squad {

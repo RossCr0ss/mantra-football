@@ -171,16 +171,17 @@ export function getPlayerSeasonStatsCached(
 
 // Wrapped in an object so the cache layer treats an empty result the same as a
 // populated one — without this, withCache's isEmptyArr check skips empty arrays
-// and re-fetches on every request, hammering the (currently broken) endpoint.
+// and re-fetches on every request (e.g. a player who hasn't played this league yet).
 export function getPlayerFormCached(
   playerId: number,
+  leagueId: number,
   opts?: Opts,
 ): Promise<PlayerRecentMatch[]> {
   return withCache<{ matches: PlayerRecentMatch[] }>(
     'fotmob_form',
-    { playerId },
+    { playerId, leagueId },
     CACHE_TTL.INJURIES,
-    async () => ({ matches: await fetchPlayerRecentMatches(playerId) }),
+    async () => ({ matches: await fetchPlayerRecentMatches(playerId, leagueId) }),
     opts,
   ).then((r) => {
     // Handle legacy cache entries that stored the array directly

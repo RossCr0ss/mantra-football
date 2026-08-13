@@ -2,15 +2,9 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
-import {
-  getLeagueTeamsCached,
-  getTeamPlayerStatsCached,
-  getLeagueRatingStatsCached,
-  getLeagueSeasonIdCached,
-  getLeagueAllPlayerStatsCached,
-} from '@/lib/fotmobCache';
+import { getSquadSeasonStats } from '@/lib/squadStats';
 import { getCachedAt } from '@/lib/mongoCache';
-import type { FotMobTeam, PlayerSeasonStats } from '@/lib/fotmob';
+import type { PlayerSeasonStats } from '@/lib/fotmob';
 import type { Squad, MantraPosition } from '@/types/squad';
 import { MANTRA_POSITIONS } from '@/lib/mantraPositions';
 
@@ -37,54 +31,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const saved = await db.collection<Squad>('squads').findOne({ leagueId });
   if (!saved?.players.length) return NextResponse.json({ players: [], dataUpdatedAt: null });
 
-  const leagueTeams = await getLeagueTeamsCached(leagueId, opts).catch((): FotMobTeam[] => []);
-  const teamNameToId = new Map<string, number>(leagueTeams.map((t) => [t.name, t.id]));
-
-  const byTeam = new Map<number, { teamName: string; playerIds: Set<number> }>();
-  for (const p of saved.players) {
-    const teamId = p.teamId || teamNameToId.get(p.teamName);
-    if (!teamId) continue;
-    if (!byTeam.has(teamId)) byTeam.set(teamId, { teamName: p.teamName, playerIds: new Set() });
-    byTeam.get(teamId)!.playerIds.add(p.id);
-  }
-
-  // ── Fetch base stats (rating/goals/assists/cards) from team squad endpoint ──
-  const teamStatMaps = await Promise.all(
-    Array.from(byTeam.entries()).map(([teamId, { teamName }]) =>
-      getTeamPlayerStatsCached(teamId, teamName, opts).then((m) => ({ teamId, map: m })),
-    ),
-  );
-
-  const allStats = new Map<number, PlayerSeasonStats>();
-  for (const { map } of teamStatMaps) {
-    map.forEach((stats, id) => allStats.set(id, stats));
-  }
-
-  // ── Fetch leagueRank / matchesPlayed / minutesPlayed from rating.json ────────
-  const seasonId = await getLeagueSeasonIdCached(leagueId, opts);
-  if (seasonId) {
-    const rankMap = await getLeagueRatingStatsCached(leagueId, seasonId, opts);
-    rankMap.forEach((rank, id) => {
-      const s = allStats.get(id);
-      if (s) {
-        s.leagueRank    = rank.leagueRank;
-        s.matchesPlayed = rank.matchesPlayed;
-        s.minutesPlayed = rank.minutesPlayed;
-      }
-    });
-  }
-
-  // ── Enrich with full CDN stats (tackles, xG, CS, saves, clearances, etc.) ───
-  if (seasonId) {
-    const cdnStats = await getLeagueAllPlayerStatsCached(leagueId, seasonId, opts);
-    cdnStats.forEach((partial, id) => {
-      const existing = allStats.get(id);
-      if (!existing) return;
-      for (const [k, v] of Object.entries(partial)) {
-        if (v != null) (existing as unknown as Record<string, unknown>)[k] = v;
-      }
-    });
-  }
+  const allStats = await getSquadSeasonStats(leagueId, saved.players, opts);
 
   const players: PlayerAnalytics[] = saved.players.map((p) => {
     const s = allStats.get(p.id);
@@ -135,7 +82,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     };
   });
 
-  const firstTeamId = Array.from(byTeam.keys())[0];
+  const firstTeamId = saved.players[0]?.teamId;
   const dataUpdatedAt = firstTeamId
     ? await getCachedAt('fotmob_stats', { teamId: firstTeamId })
     : null;
