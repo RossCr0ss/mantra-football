@@ -29,12 +29,16 @@ import {
   fetchPlayerRecentMatches,
   fetchPlayerSeasonStats,
   fetchPlayerRichStats,
+  fetchPlayerCurrentTeam,
+  fetchMatchCardEvents,
   type FotMobTeam,
   type FotMobPlayer,
   type PlayerSeasonStats,
   type FixtureOdds,
   type PlayerRecentMatch,
   type PlayerRichStats,
+  type PlayerCurrentTeam,
+  type MatchCardEvent,
 } from './fotmob';
 import { withCache, CACHE_TTL } from './mongoCache';
 
@@ -167,21 +171,52 @@ export function getPlayerSeasonStatsCached(
   );
 }
 
+// ─── Player current team (transfer detection) ─────────────────────────────────
+
+export function getPlayerCurrentTeamCached(
+  playerId: number,
+  opts?: Opts,
+): Promise<PlayerCurrentTeam | null> {
+  return withCache(
+    'fotmob_player_team',
+    { playerId },
+    CACHE_TTL.PLAYER_TEAM,
+    () => fetchPlayerCurrentTeam(playerId),
+    opts,
+  );
+}
+
+// ─── Match card events (season-long suspension tracking) ──────────────────────
+
+// Wrapped in an object — a finished match with zero cards is common and must
+// stay cached, but withCache's isEmptyArr guard would otherwise re-fetch it forever.
+export function getMatchCardEventsCached(
+  matchId: string,
+  opts?: Opts,
+): Promise<MatchCardEvent[]> {
+  return withCache<{ cards: MatchCardEvent[] }>(
+    'fotmob_match_cards',
+    { matchId },
+    CACHE_TTL.MATCH_CARDS,
+    async () => ({ cards: await fetchMatchCardEvents(matchId) }),
+    opts,
+  ).then((r) => (Array.isArray(r) ? (r as unknown as MatchCardEvent[]) : r.cards ?? []));
+}
+
 // ─── Player form (recent 5 matches) ──────────────────────────────────────────
 
 // Wrapped in an object so the cache layer treats an empty result the same as a
 // populated one — without this, withCache's isEmptyArr check skips empty arrays
-// and re-fetches on every request (e.g. a player who hasn't played this league yet).
+// and re-fetches on every request (e.g. a player who hasn't played this season yet).
 export function getPlayerFormCached(
   playerId: number,
-  leagueId: number,
   opts?: Opts,
 ): Promise<PlayerRecentMatch[]> {
   return withCache<{ matches: PlayerRecentMatch[] }>(
     'fotmob_form',
-    { playerId, leagueId },
+    { playerId },
     CACHE_TTL.INJURIES,
-    async () => ({ matches: await fetchPlayerRecentMatches(playerId, leagueId) }),
+    async () => ({ matches: await fetchPlayerRecentMatches(playerId) }),
     opts,
   ).then((r) => {
     // Handle legacy cache entries that stored the array directly

@@ -9,6 +9,7 @@ import { getPlayerInjuriesBatch } from '@/lib/injuries';
 import { getPlayerFormCached } from '@/lib/fotmobCache';
 import { suggestAvailabilityPct, summarizeRecentForm } from '@/lib/availabilitySuggestion';
 import { getSquadSeasonStats } from '@/lib/squadStats';
+import { getLeagueSuspensionInfo, type PlayerSuspensionInfo } from '@/lib/suspensionCheck';
 import { getDb } from '@/lib/mongodb';
 import TeamSquadView, { type PlayerForm } from '@/components/TeamSquadView';
 import Breadcrumbs from '@/components/Breadcrumbs';
@@ -47,7 +48,7 @@ export default async function TeamPage({ params }: Props) {
 
   const formEntries = await Promise.all(
     players.map(async (p) => {
-      const matches = await getPlayerFormCached(p.id, league.id).catch(() => []);
+      const matches = await getPlayerFormCached(p.id).catch(() => []);
       const form: PlayerForm = {
         matches,
         suggestedPct: suggestAvailabilityPct(matches),
@@ -60,6 +61,13 @@ export default async function TeamPage({ params }: Props) {
 
   const seasonStatsMap = await getSquadSeasonStats(league.id, players);
   const seasonStats: Record<number, PlayerSeasonStats> = Object.fromEntries(seasonStatsMap);
+
+  const suspensionMap = await getLeagueSuspensionInfo(league.id).catch(() => new Map());
+  const initialSuspensions: Record<number, PlayerSuspensionInfo> = Object.fromEntries(
+    players
+      .map((p) => [p.id, suspensionMap.get(p.id)] as const)
+      .filter(([, info]) => info != null),
+  );
 
   return (
     <main className="flex min-h-screen flex-col items-center px-4 py-10 sm:px-6 sm:py-12">
@@ -119,6 +127,7 @@ export default async function TeamPage({ params }: Props) {
               primaryColor={league.primaryColor}
               initialForm={initialForm}
               seasonStats={seasonStats}
+              initialSuspensions={initialSuspensions}
             />
           </>
         )}

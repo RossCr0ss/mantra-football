@@ -11,6 +11,14 @@ import {
 } from '@/lib/mantraPositions';
 import { matchMantraPlayer } from '@/lib/nameMatch';
 import type { MantraPlayer } from '@/lib/mantraFootball';
+import type { PlayerSuspensionInfo } from '@/lib/suspensionCheck';
+
+/**
+ * One less than suspensionCheck.ts's YELLOW_CARD_BAN_THRESHOLD (5) — duplicated as a
+ * plain number rather than imported, since suspensionCheck.ts pulls in server-only
+ * MongoDB code that can't be bundled into this client component.
+ */
+const YELLOW_CARD_WARNING_THRESHOLD = 4;
 
 export interface PlayerForm {
   matches: PlayerRecentMatch[];
@@ -97,10 +105,11 @@ interface Props {
   primaryColor: string;
   initialForm?: Record<number, PlayerForm>;
   seasonStats?: Record<number, PlayerSeasonStats>;
+  initialSuspensions?: Record<number, PlayerSuspensionInfo>;
 }
 
 export default function TeamSquadView({
-  leagueId, initialPlayers, injuries: initialInjuries, primaryColor, initialForm, seasonStats,
+  leagueId, initialPlayers, injuries: initialInjuries, primaryColor, initialForm, seasonStats, initialSuspensions,
 }: Props) {
   const [players, setPlayers] = useState(initialPlayers);
   const [injuries, setInjuries] = useState<Record<number, PlayerInjuryInfo>>(initialInjuries);
@@ -115,13 +124,70 @@ export default function TeamSquadView({
     const player = players.find((p) => p.id === playerId);
     const newStatus = player?.lineupStatus === status ? null : status;
     setPlayers((prev) =>
-      prev.map((p) => (p.id === playerId ? { ...p, lineupStatus: newStatus ?? undefined } : p)),
+      prev.map((p) => (p.id === playerId ? { ...p, lineupStatus: newStatus ?? undefined, lineupStatusSource: 'manual' } : p)),
     );
     await fetch('/api/squad', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leagueId, playerId, lineupStatus: newStatus }),
+      body: JSON.stringify({ leagueId, playerId, lineupStatus: newStatus, lineupStatusSource: 'manual' }),
     });
+  }
+
+  const [suspensions, setSuspensions] = useState<Record<number, PlayerSuspensionInfo>>(initialSuspensions ?? {});
+  const [checkingSuspensions, setCheckingSuspensions] = useState(false);
+  const [suspensionSummary, setSuspensionSummary] = useState<string | null>(null);
+
+  /** Only the certain case (red/2nd-yellow last match) auto-sets Suspended — see suspensionCheck.ts. */
+  function applySuspensions(infoByPlayer: Record<number, PlayerSuspensionInfo>) {
+    let updated = 0;
+    const patches: Promise<unknown>[] = [];
+    const nextPlayers = players.map((p) => {
+      const info = infoByPlayer[p.id];
+      if (!info || p.lineupStatusSource === 'manual') return p;
+
+      const shouldBeSuspended = info.redCardLastMatch;
+      const isAutoSuspended = p.lineupStatus === 'suspended' && p.lineupStatusSource === 'auto';
+      if (shouldBeSuspended === isAutoSuspended) return p;
+
+      updated += 1;
+      const nextStatus: LineupStatus | undefined = shouldBeSuspended ? 'suspended' : undefined;
+      patches.push(
+        fetch('/api/squad', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            leagueId, playerId: p.id, lineupStatus: nextStatus ?? null, lineupStatusSource: 'auto',
+          }),
+        }),
+      );
+      return { ...p, lineupStatus: nextStatus, lineupStatusSource: 'auto' as const };
+    });
+
+    setPlayers(nextPlayers);
+    return { patches, updated };
+  }
+
+  useEffect(() => {
+    if (!initialSuspensions) return;
+    const { patches } = applySuspensions(initialSuspensions);
+    void Promise.all(patches);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function checkSuspensions() {
+    setCheckingSuspensions(true);
+    setSuspensionSummary(null);
+    try {
+      const res = await fetch(`/api/leagues/${leagueId}/suspensions`);
+      const data = await res.json();
+      const infoByPlayer: Record<number, PlayerSuspensionInfo> = data.players ?? {};
+      setSuspensions(infoByPlayer);
+      const { patches, updated } = applySuspensions(infoByPlayer);
+      await Promise.all(patches);
+      setSuspensionSummary(updated === 0 ? 'No changes' : `Updated ${updated}`);
+    } finally {
+      setCheckingSuspensions(false);
+    }
   }
 
   async function setAvailabilityPct(
@@ -275,9 +341,62 @@ export default function TeamSquadView({
   const [updatingForm, setUpdatingForm] = useState(false);
   const [formSummary, setFormSummary] = useState<string | null>(null);
 
+  const [refreshingTeams, setRefreshingTeams] = useState(false);
+  const [teamRefreshSummary, setTeamRefreshSummary] = useState<string | null>(null);
+
+  /**
+   * A saved squad's teamId/teamName is a snapshot from add/import time — a
+   * transfer leaves it stale with no other signal, since nothing else in the
+   * app re-checks it. This re-syncs every player against FotMob's current
+   * primaryTeam and reports what moved.
+   */
+  async function refreshTeamInfo() {
+    setRefreshingTeams(true);
+    setTeamRefreshSummary(null);
+    try {
+      const results = await Promise.all(
+        players.map((p) =>
+          fetch(`/api/players/${p.id}/team`)
+            .then((r) => r.json())
+            .then((d) => ({ id: p.id, team: d.team as { teamId: number; teamName: string } | null }))
+            .catch(() => ({ id: p.id, team: null })),
+        ),
+      );
+
+      let moved = 0;
+      const patches: Promise<unknown>[] = [];
+      const movedNames: string[] = [];
+
+      const nextPlayers = players.map((p) => {
+        const entry = results.find((r) => r.id === p.id);
+        const team = entry?.team;
+        if (!team || team.teamId === p.teamId) return p;
+
+        moved += 1;
+        movedNames.push(`${p.name} → ${team.teamName}`);
+        patches.push(
+          fetch('/api/squad', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ leagueId, playerId: p.id, teamId: team.teamId, teamName: team.teamName }),
+          }),
+        );
+        return { ...p, teamId: team.teamId, teamName: team.teamName };
+      });
+
+      setPlayers(nextPlayers);
+      await Promise.all(patches);
+      setTeamRefreshSummary(
+        moved === 0 ? 'All up to date' : `Updated ${moved}: ${movedNames.join(', ')}`,
+      );
+    } finally {
+      setRefreshingTeams(false);
+    }
+  }
+
   async function fetchPlayerForm(player: SquadPlayer): Promise<PlayerForm> {
     const res = await fetch(
-      `/api/players/${player.id}/form?leagueId=${leagueId}&positionGroup=${player.positionGroup}`,
+      `/api/players/${player.id}/form?positionGroup=${player.positionGroup}`,
     );
     return res.json();
   }
@@ -553,6 +672,22 @@ export default function TeamSquadView({
         >
           {updatingForm ? 'Updating…' : 'Update Start % from form'}
         </button>
+        {teamRefreshSummary && <span className="max-w-md text-right text-xs text-gray-500">{teamRefreshSummary}</span>}
+        <button
+          onClick={refreshTeamInfo}
+          disabled={refreshingTeams}
+          className="rounded-lg bg-white/5 px-3 py-1.5 text-xs font-semibold text-gray-400 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
+        >
+          {refreshingTeams ? 'Checking…' : 'Refresh team info'}
+        </button>
+        {suspensionSummary && <span className="text-xs text-gray-500">{suspensionSummary}</span>}
+        <button
+          onClick={checkSuspensions}
+          disabled={checkingSuspensions}
+          className="rounded-lg bg-white/5 px-3 py-1.5 text-xs font-semibold text-gray-400 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
+        >
+          {checkingSuspensions ? 'Checking…' : 'Check suspensions'}
+        </button>
       </div>
 
       {/* ── Players by position group ── */}
@@ -583,6 +718,7 @@ export default function TeamSquadView({
                   injury={injuries[player.id]}
                   form={form[player.id]}
                   seasonStats={seasonStats?.[player.id]}
+                  suspensionInfo={suspensions[player.id]}
                   isEditing={editingId === player.id}
                   onEditToggle={() => setEditingId((id) => (id === player.id ? null : player.id))}
                   onTogglePosition={(pos) => togglePosition(player.id, pos)}
@@ -635,6 +771,7 @@ function PlayerCard({
   injury,
   form,
   seasonStats,
+  suspensionInfo,
   isEditing,
   onEditToggle,
   onTogglePosition,
@@ -646,6 +783,7 @@ function PlayerCard({
   injury?: PlayerInjuryInfo;
   form?: PlayerForm;
   seasonStats?: PlayerSeasonStats;
+  suspensionInfo?: PlayerSuspensionInfo;
   isEditing: boolean;
   onEditToggle: () => void;
   onTogglePosition: (pos: MantraPosition) => void;
@@ -735,6 +873,16 @@ function PlayerCard({
                 ? `${form.cleanSheetsRecent}/${form.matches.length} CS`
                 : `${form.goalsRecent}g ${form.assistsRecent}a`}
           </span>
+        </div>
+      )}
+
+      {/* Suspension risk — a red/2nd-yellow in the most recent league match auto-sets
+          Susp. above (see suspensionCheck.ts); accumulated yellows are shown here only
+          as a soft warning, since exact ban thresholds vary by competition. */}
+      {suspensionInfo && suspensionInfo.seasonYellowCards >= YELLOW_CARD_WARNING_THRESHOLD
+        && player.lineupStatus !== 'suspended' && (
+        <div className="rounded-lg border border-orange-500/20 bg-orange-950/20 px-2 py-1 text-center text-[10px] font-semibold text-orange-400">
+          🟨 {suspensionInfo.seasonYellowCards} yellow cards this season — ban risk
         </div>
       )}
 

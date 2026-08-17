@@ -39,8 +39,14 @@ export async function PATCH(req: NextRequest) {
     lineupStatus?: LineupStatus | null;
     availabilityPct?: number;
     availabilityPctSource?: 'manual' | 'suggested';
+    lineupStatusSource?: 'manual' | 'auto';
+    teamId?: number;
+    teamName?: string;
   };
-  const { leagueId, playerId, mantraPositions, lineupStatus, availabilityPct, availabilityPctSource } = body;
+  const {
+    leagueId, playerId, mantraPositions, lineupStatus, availabilityPct, availabilityPctSource,
+    lineupStatusSource, teamId, teamName,
+  } = body;
 
   if (!leagueId || !playerId) {
     return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });
@@ -56,6 +62,9 @@ export async function PATCH(req: NextRequest) {
   if (lineupStatus !== undefined) {
     $set['players.$.lineupStatus'] = lineupStatus ?? null;
   }
+  if (lineupStatusSource !== undefined) {
+    $set['players.$.lineupStatusSource'] = lineupStatusSource;
+  }
   if (availabilityPct !== undefined) {
     if (typeof availabilityPct !== 'number' || availabilityPct < 0 || availabilityPct > 100) {
       return NextResponse.json({ error: 'Invalid availabilityPct' }, { status: 400 });
@@ -64,6 +73,10 @@ export async function PATCH(req: NextRequest) {
   }
   if (availabilityPctSource !== undefined) {
     $set['players.$.availabilityPctSource'] = availabilityPctSource;
+  }
+  if (teamId !== undefined && teamName !== undefined) {
+    $set['players.$.teamId'] = teamId;
+    $set['players.$.teamName'] = teamName;
   }
 
   const db = await getDb();

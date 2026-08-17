@@ -7,12 +7,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const playerId = parseInt(params.id, 10);
   if (isNaN(playerId)) return NextResponse.json({ error: 'Invalid player id' }, { status: 400 });
 
-  const leagueId = Number(req.nextUrl.searchParams.get('leagueId'));
-  if (!leagueId) return NextResponse.json({ error: 'leagueId required' }, { status: 400 });
-
   const positionGroup = (req.nextUrl.searchParams.get('positionGroup') ?? 'MID') as PositionGroup;
 
-  const matches = await getPlayerFormCached(playerId, leagueId);
+  const matches = await getPlayerFormCached(playerId);
   const suggestedPct = suggestAvailabilityPct(matches);
   const summary = summarizeRecentForm(matches, positionGroup);
 

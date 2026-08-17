@@ -24,6 +24,8 @@ export interface SquadPlayer {
   mantraPositions: MantraPosition[];
   /** Manually set availability for the next matchday */
   lineupStatus?: LineupStatus;
+  /** Whether lineupStatus was hand-set or auto-detected (e.g. a red card last match). Undefined = never touched. */
+  lineupStatusSource?: 'manual' | 'auto';
   /** Expected playing time as % (0–100). 100 = certain full-match starter. Default: 100. */
   availabilityPct?: number;
   /** Whether availabilityPct was hand-set or algorithm-suggested from recent form. Undefined = never touched. */

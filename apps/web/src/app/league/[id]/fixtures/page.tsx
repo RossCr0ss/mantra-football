@@ -43,6 +43,21 @@ function winPct(odds: FixtureOdds, isHome: boolean): number | null {
   return Math.round((1 / w) * 100);
 }
 
+/**
+ * Table-position difficulty is meaningless before the table means anything —
+ * round 1 (or any small sample) has teams sitting on artifacts of fixture order,
+ * not real quality (e.g. a promoted side can outrank a title contender purely
+ * because nobody's played yet). Odds price in current form/quality directly,
+ * so once they've loaded for a fixture they override the position-based value.
+ */
+function oddsDifficulty(pct: number): number {
+  if (pct >= 65) return 5;
+  if (pct >= 50) return 4;
+  if (pct >= 35) return 3;
+  if (pct >= 20) return 2;
+  return 1;
+}
+
 // ─── Formatters ───────────────────────────────────────────────────────────────
 
 function formatDate(dateStr: string) {
@@ -151,7 +166,9 @@ function FixtureCard({
   oddsState: FixtureOdds | null | undefined;
 }) {
   const teamLogoUrl = `https://images.fotmob.com/image_resources/logo/teamlogo/${team.teamId}.png`;
-  const ds = fix ? diffStyle(fix.difficulty) : null;
+  const oddsPct = fix && oddsState ? winPct(oddsState, fix.isHome) : null;
+  const effectiveDifficulty = oddsPct != null ? oddsDifficulty(oddsPct) : fix?.difficulty ?? null;
+  const ds = fix ? diffStyle(effectiveDifficulty) : null;
   const playerNames = team.players.map((p) => p.name.split(' ').slice(-1)[0]).join(', ');
 
   return (
@@ -207,7 +224,7 @@ function FixtureCard({
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-600">{ds?.label}</span>
               <div className={`flex h-7 w-7 items-center justify-center rounded-lg text-sm font-bold ${ds?.bg} ${ds?.text}`}>
-                {fix.difficulty ?? '?'}
+                {effectiveDifficulty ?? '?'}
               </div>
             </div>
 

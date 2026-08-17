@@ -1046,21 +1046,21 @@ export default function TourPage() {
       const mod = MODULES.find((m) => m.name === selectedModule);
       if (mod) { best = assignModule(available, mod.slots); chosenModuleName = mod.name; }
     } else {
-      // Primary criterion: fewest out-of-position slots (OOP is a last resort).
-      // Secondary criterion: highest total effective score (with malus applied).
-      let bestOop = Infinity;
+      // Highest total effective score wins. effectiveScore already penalizes
+      // out-of-position slots by dropping their rating component (see its doc
+      // comment) — additionally requiring fewest-OOP-first double-counts that
+      // penalty and can pick a lower-scoring formation over a genuinely better one.
       let bestScore = -Infinity;
       for (const mod of MODULES) {
         const assignment = assignModule(available, mod.slots);
         if (!assignment) continue;
-        const oopCount = assignment.penalty.filter((p) => p < 0).length;
         const score = assignment.ids.reduce((sum, id, i) => {
           const p = available.find((pl) => pl.id === id);
           const sb = p?.scoreBreakdown;
           return sum + (sb ? effectiveScore(sb, assignment.penalty[i]) : 0);
         }, 0);
-        if (oopCount < bestOop || (oopCount === bestOop && score > bestScore)) {
-          bestOop = oopCount; bestScore = score; best = assignment; chosenModuleName = mod.name;
+        if (score > bestScore) {
+          bestScore = score; best = assignment; chosenModuleName = mod.name;
         }
       }
     }

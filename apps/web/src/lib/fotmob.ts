@@ -377,6 +377,33 @@ export interface FotMobPlayer {
   redCards: number;
 }
 
+export interface PlayerCurrentTeam {
+  teamId: number;
+  teamName: string;
+}
+
+/**
+ * A saved squad's teamId/teamName is a snapshot from add/import time and never
+ * updates on its own — a transfer leaves it stale. `primaryTeam` on the player
+ * profile is the authoritative current club, unlike a team's own squad-list
+ * endpoint (which can lag a transfer by a while on FotMob's side).
+ */
+export async function fetchPlayerCurrentTeam(playerId: number): Promise<PlayerCurrentTeam | null> {
+  try {
+    const res = await fetch(
+      `https://www.fotmob.com/api/data/playerData?id=${playerId}`,
+      { headers: playerDataHeaders(), cache: 'no-store' },
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const team = data?.primaryTeam;
+    if (!team?.teamId || !team?.teamName) return null;
+    return { teamId: Number(team.teamId), teamName: String(team.teamName) };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchPlayerInjuryInfo(playerId: number): Promise<PlayerInjuryInfo | null> {
   let res: Response;
   try {
@@ -710,13 +737,34 @@ export interface PlayerRecentMatch {
 }
 
 /**
- * Last 5 appearances in the given league only — recentMatches mixes in cup and
- * international fixtures, so leagueId filters those out before taking the last 5.
+ * European club seasons run roughly July–June — using July 1 as the cutoff is
+ * safely before any of our 5 leagues' opening matchday, so it can't clip the
+ * current season while reliably dropping the previous one.
  */
-export async function fetchPlayerRecentMatches(
-  playerId: number,
-  leagueId: number,
-): Promise<PlayerRecentMatch[]> {
+function currentSeasonStart(): Date {
+  const now = new Date();
+  const year = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1; // month 6 = July
+  return new Date(year, 6, 1);
+}
+
+function parseMatchDate(m: Record<string, unknown>): Date {
+  const md = m.matchDate as Record<string, unknown> | null;
+  const raw = md?.utcTime ?? m.date ?? (m.status as Record<string, unknown> | null)?.utcTime ?? '';
+  return new Date(String(raw));
+}
+
+/**
+ * Last 5 appearances this season for the player's own club, across ANY club
+ * competition (domestic league, domestic cups, continental) — recentMatches
+ * mixes in international caps and prior-season matches, neither of which
+ * belong in a "recent form" read: international duty isn't club form, and a
+ * player who hasn't played yet this season showing 10-month-old cards/minutes
+ * as if current is actively misleading (confirmed on real data — see
+ * docs/fotmob-api.md). Filtering to the season window first, then to the
+ * most common teamId within that window, keeps every club competition while
+ * dropping both of those.
+ */
+export async function fetchPlayerRecentMatches(playerId: number): Promise<PlayerRecentMatch[]> {
   try {
     const res = await fetch(
       `https://www.fotmob.com/api/data/playerData?id=${playerId}`,
@@ -727,8 +775,18 @@ export async function fetchPlayerRecentMatches(
     const raw = data?.recentMatches as Record<string, unknown>[] | null;
     if (!Array.isArray(raw)) return [];
 
-    return raw
-      .filter((m) => Number(m.leagueId ?? 0) === leagueId)
+    const seasonStart = currentSeasonStart();
+    const thisSeason = raw.filter((m) => parseMatchDate(m) >= seasonStart);
+
+    const teamIdCounts = new Map<number, number>();
+    for (const m of thisSeason) {
+      const tid = Number(m.teamId ?? 0);
+      if (tid > 0) teamIdCounts.set(tid, (teamIdCounts.get(tid) ?? 0) + 1);
+    }
+    const myClubTeamId = Array.from(teamIdCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
+
+    return thisSeason
+      .filter((m) => Number(m.teamId ?? 0) === myClubTeamId)
       .slice(-5)
       .map((m): PlayerRecentMatch | null => {
         try {
@@ -986,6 +1044,51 @@ export async function fetchLeagueData(leagueId: number): Promise<{
     : null;
 
   return { tablePositions, matches, currentRound };
+}
+
+export interface MatchCardEvent {
+  playerId: number;
+  playerName: string;
+  /** 'YellowRed' = second yellow in the same match, not a straight red */
+  card: 'Yellow' | 'Red' | 'YellowRed';
+  minute: number;
+}
+
+/**
+ * Card events for a single finished match, from the match-detail endpoint's
+ * event timeline — the only place FotMob exposes per-match disciplinary data.
+ * Used to reconstruct season-long card accumulation (see suspensionCheck.ts),
+ * since neither the team-squad endpoint nor the season CDN stat lists carry
+ * this reliably yet this early in a season.
+ */
+export async function fetchMatchCardEvents(matchId: string): Promise<MatchCardEvent[]> {
+  try {
+    const res = await fetch(
+      `https://www.fotmob.com/api/data/matchDetails?matchId=${matchId}`,
+      { headers: FOTMOB_HEADERS, cache: 'no-store' },
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    const events = data?.content?.matchFacts?.events?.events ?? [];
+    if (!Array.isArray(events)) return [];
+
+    const cards: MatchCardEvent[] = [];
+    for (const e of events) {
+      if (e?.type !== 'Card') continue;
+      if (e.card !== 'Yellow' && e.card !== 'Red' && e.card !== 'YellowRed') continue;
+      const playerId = e.playerId ?? e.player?.id;
+      if (!playerId) continue;
+      cards.push({
+        playerId: Number(playerId),
+        playerName: e.fullName ?? e.player?.name ?? e.nameStr ?? '',
+        card: e.card,
+        minute: Number(e.time ?? 0),
+      });
+    }
+    return cards;
+  } catch {
+    return [];
+  }
 }
 
 /**
