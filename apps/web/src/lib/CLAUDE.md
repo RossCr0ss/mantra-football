@@ -21,7 +21,7 @@
 - `mongoCache.ts` `withCache(collection, filter, CACHE_TTL.X, fetcher, {forceRefresh})` is **stale-while-revalidate** (`freshMs` / `staleMs`, deduped background refresh). TTL values live in `CACHE_TTL` in code — trust the code over docs.
 - New cached FotMob call = add fetcher to the matching `lib/fotmob/*.ts` file (use `fotmobFetch`, never raw `fetch` — MongoDB is the only cache layer), wrapper to `fotmobCache.ts`.
 - Fixtures: `fixturesCache.ts` (separate Map-serialising cache). Mantra positions: `mantraFootballCache.ts`.
-- Authenticated mantrafootball calls (login, roster) are never cached/persisted.
+- Authenticated mantrafootball calls (login, roster) are never cached/persisted. All mantrafootball.org HTTP goes through `mantraFetch` (`no-store` + 15 s timeout) — don't use raw `fetch` there.
 
 ## FotMob wrapper (`lib/fotmob/*`, barrel `lib/fotmob.ts`) — main functions
 Import from `@/lib/fotmob` in server code (barrel re-exports everything). Files: `types.ts` (all interfaces), `http.ts` (**`fotmobFetch(url, 'default'|'player'|'cdn')`** — the only way to hit FotMob: headers, `no-store`, 15 s timeout; plus `FOTMOB_HEADERS`, `playerDataHeaders`), `cdnStats.ts`, `league.ts` (season ids + `fetchLeagueData`), `teams.ts`, `players.ts` (injury/rich stats/recent matches/search), `matches.ts` (odds, card events). Client code: `import type` from the barrel; runtime import only `@/lib/fotmob/matches` (`fetchMatchOddsClient`).

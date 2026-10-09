@@ -21,6 +21,14 @@ const HTML_HEADERS = {
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 };
 
+/** Per-request timeout — a stalled mantrafootball.org must not hang our API routes. */
+export const MANTRA_TIMEOUT_MS = 15_000;
+
+/** The only place that performs mantrafootball.org HTTP requests: no Next fetch cache + a timeout. */
+function mantraFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(MANTRA_TIMEOUT_MS), ...init });
+}
+
 /** Our FotMob LEAGUES id → mantrafootball.org tournament id (derived from `LEAGUES[].mantraTournamentId`). */
 export const MANTRA_TOURNAMENT_ID: Record<number, number> = Object.fromEntries(
   LEAGUES.map((l) => [l.id, l.mantraTournamentId]),
@@ -40,9 +48,9 @@ export interface MantraPlayer {
  */
 export async function resolveMantraLeagueId(tournamentId: number): Promise<number | null> {
   try {
-    const res = await fetch(
+    const res = await mantraFetch(
       `https://mantrafootball.org/api/leagues?filter[tournament_id]=${tournamentId}&page[size]=1`,
-      { headers: HEADERS, cache: 'no-store' },
+      { headers: HEADERS },
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -72,9 +80,9 @@ export async function fetchMantraTournamentPlayers(tournamentId: number): Promis
   do {
     let res: Response;
     try {
-      res = await fetch(
+      res = await mantraFetch(
         `https://mantrafootball.org/api/players?filter[league_id]=${leagueId}&page[number]=${page}&page[size]=100`,
-        { headers: HEADERS, cache: 'no-store' },
+        { headers: HEADERS },
       );
     } catch {
       break;
@@ -116,9 +124,8 @@ function cookieHeaderFrom(res: Response): string | null {
  */
 export async function mantraLogin(email: string, password: string): Promise<string | null> {
   try {
-    const signInRes = await fetch('https://mantrafootball.org/users/sign_in', {
+    const signInRes = await mantraFetch('https://mantrafootball.org/users/sign_in', {
       headers: HTML_HEADERS,
-      cache: 'no-store',
     });
     const signInHtml = await signInRes.text();
     const token = load(signInHtml)('input[name="authenticity_token"]').attr('value');
@@ -132,7 +139,7 @@ export async function mantraLogin(email: string, password: string): Promise<stri
       'user[remember_me]': '0',
     });
 
-    const loginRes = await fetch('https://mantrafootball.org/users/sign_in', {
+    const loginRes = await mantraFetch('https://mantrafootball.org/users/sign_in', {
       method: 'POST',
       headers: {
         ...HTML_HEADERS,
@@ -141,7 +148,6 @@ export async function mantraLogin(email: string, password: string): Promise<stri
       },
       body,
       redirect: 'manual',
-      cache: 'no-store',
     });
 
     if (loginRes.status !== 302) return null;
@@ -167,7 +173,7 @@ export interface MantraRoster {
 /** Latest season's start year (e.g. 2026 for "26-27"), from /api/seasons — max `id`. */
 async function fetchMantraCurrentSeasonStartYear(): Promise<number | null> {
   try {
-    const res = await fetch('https://mantrafootball.org/api/seasons', { headers: HEADERS, cache: 'no-store' });
+    const res = await mantraFetch('https://mantrafootball.org/api/seasons', { headers: HEADERS });
     if (!res.ok) return null;
     const seasons = ((await res.json())?.data ?? []) as { id: number; start_year: number }[];
     if (seasons.length === 0) return null;
@@ -184,9 +190,8 @@ export async function fetchMantraTeamRoster(
 ): Promise<MantraRoster> {
   const empty: MantraRoster = { players: [], isCurrentSeason: false };
   try {
-    const res = await fetch(`https://mantrafootball.org/teams/${teamId}`, {
+    const res = await mantraFetch(`https://mantrafootball.org/teams/${teamId}`, {
       headers: { ...HTML_HEADERS, Cookie: sessionCookie },
-      cache: 'no-store',
     });
     if (!res.ok) return empty;
     const html = await res.text();
