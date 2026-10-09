@@ -23,6 +23,7 @@ import {
   fetchTeamPlayerStats,
   fetchLeagueRatingStats,
   fetchLeagueSeasonId,
+  fetchLeaguePreviousSeasonId,
   fetchMatchOdds,
   fetchLeagueStatsList,
   fetchLeagueAllPlayerStats,
@@ -31,6 +32,8 @@ import {
   fetchPlayerRichStats,
   fetchPlayerCurrentTeam,
   fetchMatchCardEvents,
+  searchFotMobPlayer,
+  fetchPlayerPrimaryPosition,
   type FotMobTeam,
   type FotMobPlayer,
   type PlayerSeasonStats,
@@ -38,6 +41,7 @@ import {
   type PlayerRecentMatch,
   type PlayerRichStats,
   type PlayerCurrentTeam,
+  type FotMobSearchResult,
   type MatchCardEvent,
 } from './fotmob';
 import { withCache, CACHE_TTL } from './mongoCache';
@@ -106,13 +110,14 @@ interface RatingEntry {
   leagueRank: number;
   matchesPlayed: number;
   minutesPlayed: number;
+  rating: number | null;
 }
 
 export async function getLeagueRatingStatsCached(
   leagueId: number,
   seasonId: string,
   opts?: Opts,
-): Promise<Map<number, { leagueRank: number; matchesPlayed: number; minutesPlayed: number }>> {
+): Promise<Map<number, { leagueRank: number; matchesPlayed: number; minutesPlayed: number; rating: number | null }>> {
   const rows = await withCache<RatingEntry[]>(
     'fotmob_ratings',
     { leagueId, seasonId },
@@ -137,6 +142,21 @@ export function getLeagueSeasonIdCached(
     { leagueId },
     CACHE_TTL.SEASON,
     () => fetchLeagueSeasonId(leagueId),
+    opts,
+  );
+}
+
+// Previous season's tournamentId never changes once the current season is under
+// way, so it's safe to reuse the same long TTL as the current-season id.
+export function getLeaguePreviousSeasonIdCached(
+  leagueId: number,
+  opts?: Opts,
+): Promise<string | null> {
+  return withCache(
+    'fotmob_prev_season',
+    { leagueId },
+    CACHE_TTL.SEASON,
+    () => fetchLeaguePreviousSeasonId(leagueId),
     opts,
   );
 }
@@ -182,6 +202,37 @@ export function getPlayerCurrentTeamCached(
     { playerId },
     CACHE_TTL.PLAYER_TEAM,
     () => fetchPlayerCurrentTeam(playerId),
+    opts,
+  );
+}
+
+// ─── Player search (fallback when a team's own squad list is incomplete) ──────
+
+// Wrapped in an object for the same reason as getPlayerFormCached — a name with
+// no results is a valid, common outcome that must stay cached rather than
+// re-querying FotMob on every request.
+export function searchFotMobPlayerCached(
+  term: string,
+  opts?: Opts,
+): Promise<FotMobSearchResult[]> {
+  return withCache<{ results: FotMobSearchResult[] }>(
+    'fotmob_search',
+    { term },
+    CACHE_TTL.PLAYER_TEAM,
+    async () => ({ results: await searchFotMobPlayer(term) }),
+    opts,
+  ).then((r) => (Array.isArray(r) ? (r as unknown as FotMobSearchResult[]) : r.results ?? []));
+}
+
+export function getPlayerPrimaryPositionCached(
+  playerId: number,
+  opts?: Opts,
+): Promise<{ label: string; group: 'GK' | 'DEF' | 'MID' | 'FWD' } | null> {
+  return withCache(
+    'fotmob_player_position',
+    { playerId },
+    CACHE_TTL.PLAYER_TEAM,
+    () => fetchPlayerPrimaryPosition(playerId),
     opts,
   );
 }

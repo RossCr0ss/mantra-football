@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchMantraTeamRoster, MANTRA_TOURNAMENT_ID } from '@/lib/mantraFootball';
 import { getMantraTournamentPlayersCached } from '@/lib/mantraFootballCache';
-import { getLeagueTeamsCached, getTeamPlayersCached } from '@/lib/fotmobCache';
-import { matchMantraPlayer, type MatchCandidate } from '@/lib/nameMatch';
-import type { SquadPlayer } from '@/types/squad';
+import {
+  getLeagueTeamsCached, getTeamPlayersCached, searchFotMobPlayerCached, getPlayerPrimaryPositionCached,
+} from '@/lib/fotmobCache';
+import { matchMantraPlayer, clubSimilarity, type MatchCandidate } from '@/lib/nameMatch';
+import type { SquadPlayer, MantraPosition } from '@/types/squad';
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const leagueId = Number(params.id);
@@ -46,7 +48,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }));
 
   const players: SquadPlayer[] = [];
-  const unmatched: string[] = [];
+  const stillUnmatched: { fullName: string; clubName: string; positions: MantraPosition[] }[] = [];
 
   for (const entry of roster) {
     const fullName = `${entry.firstName} ${entry.lastName}`.trim();
@@ -54,7 +56,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const match = matchMantraPlayer({ name: fullName, teamName: clubName }, candidates);
 
     if (!match) {
-      unmatched.push(fullName);
+      stillUnmatched.push({ fullName, clubName, positions: entry.positions });
       continue;
     }
 
@@ -68,6 +70,43 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       positionGroup: p.position,
       imageUrl: p.imageUrl,
       injured: p.injured,
+      mantraPositions: entry.positions,
+    });
+  }
+
+  // Fallback for players a team's own roster listing is missing entirely (confirmed
+  // live: FotMob's squad.squad is sometimes null for a whole club, silently hiding
+  // real members like Eguinaldo/Marlon Gomes from the candidate pool above no matter
+  // how good the name match would be) — FotMob's own name search sidesteps that
+  // endpoint completely. It isn't nickname-fuzzy the way matchMantraPlayer is, so
+  // this only catches names mantrafootball.org already spells the FotMob way.
+  const usedIds = new Set(players.map((p) => p.id));
+  const unmatched: string[] = [];
+
+  for (const entry of stillUnmatched) {
+    const results = await searchFotMobPlayerCached(entry.fullName);
+    const candidatesByClub = results
+      .filter((r) => !usedIds.has(r.id))
+      .map((r) => ({ result: r, clubSim: clubSimilarity(entry.clubName, r.teamName) }))
+      .sort((a, b) => b.clubSim - a.clubSim);
+    const best = candidatesByClub[0];
+
+    if (!best || best.clubSim < 0.5) {
+      unmatched.push(entry.fullName);
+      continue;
+    }
+
+    const pos = await getPlayerPrimaryPositionCached(best.result.id);
+    usedIds.add(best.result.id);
+    players.push({
+      id: best.result.id,
+      name: best.result.name,
+      teamId: best.result.teamId,
+      teamName: best.result.teamName,
+      position: pos?.label ?? entry.positions[0] ?? '',
+      positionGroup: pos?.group ?? 'MID',
+      imageUrl: `https://images.fotmob.com/image_resources/playerimages/${best.result.id}.png`,
+      injured: false,
       mantraPositions: entry.positions,
     });
   }

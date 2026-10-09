@@ -2,7 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
-import { getSquadSeasonStats } from '@/lib/squadStats';
+import { getSquadSeasonStats, getSquadPriorSeasonStats } from '@/lib/squadStats';
 import { getCachedAt } from '@/lib/mongoCache';
 import type { PlayerSeasonStats } from '@/lib/fotmob';
 import type { Squad, MantraPosition } from '@/types/squad';
@@ -18,6 +18,13 @@ export interface PlayerAnalytics extends PlayerSeasonStats {
   positionGroup: string;
   imageUrl: string;
   mantraPositions: MantraPosition[];
+  /**
+   * Previous completed season's stats — used only as an early-season scoring
+   * fallback by the Tour Selector auto-select (see calcScore in tour/page.tsx),
+   * never displayed as this season's numbers. Null once the current season has
+   * enough of its own sample.
+   */
+  priorSeason: Partial<PlayerSeasonStats> | null;
 }
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -31,7 +38,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const saved = await db.collection<Squad>('squads').findOne({ leagueId });
   if (!saved?.players.length) return NextResponse.json({ players: [], dataUpdatedAt: null });
 
-  const allStats = await getSquadSeasonStats(leagueId, saved.players, opts);
+  const [allStats, priorStats] = await Promise.all([
+    getSquadSeasonStats(leagueId, saved.players, opts),
+    getSquadPriorSeasonStats(leagueId, saved.players, opts),
+  ]);
 
   const players: PlayerAnalytics[] = saved.players.map((p) => {
     const s = allStats.get(p.id);
@@ -79,6 +89,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       successfulDribbles:    s?.successfulDribbles  ?? null,
       bigChancesCreated:     s?.bigChancesCreated   ?? null,
       bigChancesMissed:      s?.bigChancesMissed    ?? null,
+      priorSeason:           priorStats.get(p.id)   ?? null,
     };
   });
 

@@ -3,6 +3,7 @@ import {
   getTeamPlayerStatsCached,
   getLeagueRatingStatsCached,
   getLeagueSeasonIdCached,
+  getLeaguePreviousSeasonIdCached,
   getLeagueAllPlayerStatsCached,
 } from '@/lib/fotmobCache';
 import type { FotMobTeam, PlayerSeasonStats } from '@/lib/fotmob';
@@ -63,4 +64,65 @@ export async function getSquadSeasonStats(
   }
 
   return allStats;
+}
+
+/**
+ * Previous-completed-season stats for a squad — used only as an early-season
+ * scoring fallback (see calcScore in tour/page.tsx), never shown as this
+ * season's numbers. Unlike getSquadSeasonStats this skips the team-endpoint
+ * call entirely (it only ever reflects the *current* season, not an override),
+ * so it's sourced purely from the two season-parameterized endpoints: rating.json
+ * (rating/matchesPlayed/minutesPlayed) and the CDN stat lists (goals, assists,
+ * xG, defensive stats, GK stats). Fields the team endpoint alone provides
+ * (aerialsWon, dribbledPast, successfulDribbles, highClaims, etc.) are left
+ * undefined for the prior season — an accepted gap, not a bug.
+ */
+export async function getSquadPriorSeasonStats(
+  leagueId: number,
+  players: SquadPlayer[],
+  opts?: Opts,
+): Promise<Map<number, Partial<PlayerSeasonStats>>> {
+  if (players.length === 0) return new Map();
+
+  const seasonId = await getLeaguePreviousSeasonIdCached(leagueId, opts);
+  if (!seasonId) return new Map();
+
+  const squadIds = new Set(players.map((p) => p.id));
+  const stats = new Map<number, Partial<PlayerSeasonStats>>();
+
+  const rankMap = await getLeagueRatingStatsCached(leagueId, seasonId, opts).catch(
+    () => new Map<number, { leagueRank: number; matchesPlayed: number; minutesPlayed: number; rating: number | null }>(),
+  );
+  rankMap.forEach((rank, id) => {
+    if (!squadIds.has(id)) return;
+    stats.set(id, {
+      playerId: id,
+      rating: rank.rating,
+      matchesPlayed: rank.matchesPlayed,
+      minutesPlayed: rank.minutesPlayed,
+    });
+  });
+
+  const cdnStats = await getLeagueAllPlayerStatsCached(leagueId, seasonId, opts).catch(
+    () => new Map<number, Partial<PlayerSeasonStats>>(),
+  );
+  cdnStats.forEach((partial, id) => {
+    if (!squadIds.has(id)) return;
+    const existing = stats.get(id) ?? { playerId: id };
+    stats.set(id, { ...existing, ...partial });
+  });
+
+  // rating.json only lists players who cleared some internal appearance
+  // threshold — a squad-rotation player (confirmed live: a summer signing who
+  // played ~11 matches for their previous club) can have real CDN counting
+  // stats (tackles, minutes) with no rating.json entry at all, leaving
+  // matchesPlayed unset. Without a match count the per-match blend in
+  // calcScore can't turn those totals into a rate, so estimate it from minutes.
+  stats.forEach((s) => {
+    if (s.matchesPlayed == null && s.minutesPlayed != null && s.minutesPlayed > 0) {
+      s.matchesPlayed = Math.max(1, Math.round(s.minutesPlayed / 90));
+    }
+  });
+
+  return stats;
 }

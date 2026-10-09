@@ -172,7 +172,9 @@ const CDN_STAT_CONFIG: ReadonlyArray<readonly [string, keyof PlayerSeasonStats, 
   ['goals',                'goals',                 false],
   ['goal_assist',          'assists',               false],
   ['mins_played',          'minutesPlayed',         false],
-  ['expected_goals',       'expectedGoals',         true ],  // SubStat = total xG
+  // expected_goals swaps the usual convention: StatValue is the real xG total,
+  // SubStatValue is actually the goals total — verified live against 2025/26 PL data.
+  ['expected_goals',       'expectedGoals',         false],
   ['ontarget_scoring_att', 'shots',                 true ],  // SubStat = total shots on target
   ['total_att_assist',     'chancesCreated',        false],  // StatValue = total key passes
   ['big_chance_created',   'bigChancesCreated',     true ],
@@ -223,13 +225,19 @@ export async function fetchLeagueAllPlayerStats(
 
 /**
  * Fetches the league-wide rating ranking and returns a map of
- * playerId → { leagueRank, matchesPlayed, minutesPlayed }.
+ * playerId → { leagueRank, matchesPlayed, minutesPlayed, rating }.
  * Uses data.fotmob.com which serves gzipped static JSON (accessible server-side).
+ *
+ * `rating` (StatValue) is unused by the current-season aggregation in
+ * squadStats.ts — that gets its `rating` field from the team endpoint instead,
+ * which only ever reflects the *current* season. It exists here so a caller
+ * fetching a **previous** season's id (which the team endpoint can't do) can
+ * still recover that season's real rating value.
  */
 export async function fetchLeagueRatingStats(
   leagueId: number,
   seasonId: string,
-): Promise<Map<number, { leagueRank: number; matchesPlayed: number; minutesPlayed: number }>> {
+): Promise<Map<number, { leagueRank: number; matchesPlayed: number; minutesPlayed: number; rating: number | null }>> {
   const res = await fetch(
     `https://data.fotmob.com/stats/${leagueId}/season/${seasonId}/rating.json`,
     {
@@ -241,17 +249,18 @@ export async function fetchLeagueRatingStats(
 
   const data = await res.json() as {
     TopLists: { StatName: string; StatList: {
-      ParticiantId: number; Rank: number; MatchesPlayed: number; MinutesPlayed: number;
+      ParticiantId: number; Rank: number; MatchesPlayed: number; MinutesPlayed: number; StatValue: number | null;
     }[] }[]
   };
 
-  const map = new Map<number, { leagueRank: number; matchesPlayed: number; minutesPlayed: number }>();
+  const map = new Map<number, { leagueRank: number; matchesPlayed: number; minutesPlayed: number; rating: number | null }>();
   const list = data.TopLists?.find((t) => t.StatName === 'rating')?.StatList ?? [];
   for (const entry of list) {
     map.set(entry.ParticiantId, {
       leagueRank: entry.Rank,
       matchesPlayed: entry.MatchesPlayed,
       minutesPlayed: entry.MinutesPlayed,
+      rating: entry.StatValue ?? null,
     });
   }
   return map;
@@ -274,6 +283,40 @@ export async function fetchLeagueSeasonId(leagueId: number): Promise<string | nu
     const data = await res.json();
     const seasonId: string | null = data?.stats?.primarySeasonId ?? null;
     return seasonId ? String(seasonId) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns the tournamentId of the season immediately before the current one for a
+ * league — used as a fallback data source early in a new season, when every squad
+ * player's current-season stats are still 0/null and the auto-select scoring would
+ * otherwise treat every player as identical. Reads `stats.tournamentSeasons` off any
+ * team in the league (same response `fetchLeagueSeasonId` uses), which lists every
+ * season the team has competed in across all competitions, newest first; filters to
+ * this league only and takes the entry right after the current `primarySeasonId`.
+ */
+export async function fetchLeaguePreviousSeasonId(leagueId: number): Promise<string | null> {
+  try {
+    const teams = await fetchLeagueTeams(leagueId);
+    if (!teams.length) return null;
+    const res = await fetch(
+      `https://www.fotmob.com/api/data/teams?id=${teams[0].id}`,
+      { headers: FOTMOB_HEADERS, cache: 'no-store' },
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const primarySeasonId: string | null = data?.stats?.primarySeasonId != null
+      ? String(data.stats.primarySeasonId) : null;
+    const seasons = (data?.stats?.tournamentSeasons as
+      { tournamentId?: string | number; parentLeagueId?: string | number }[] | undefined) ?? [];
+    const ownLeagueSeasons = seasons
+      .filter((s) => String(s.parentLeagueId) === String(leagueId))
+      .map((s) => String(s.tournamentId));
+    const idx = ownLeagueSeasons.findIndex((id) => id === primarySeasonId);
+    if (idx === -1 || idx + 1 >= ownLeagueSeasons.length) return null;
+    return ownLeagueSeasons[idx + 1];
   } catch {
     return null;
   }
@@ -399,6 +442,78 @@ export async function fetchPlayerCurrentTeam(playerId: number): Promise<PlayerCu
     const team = data?.primaryTeam;
     if (!team?.teamId || !team?.teamName) return null;
     return { teamId: Number(team.teamId), teamName: String(team.teamName) };
+  } catch {
+    return null;
+  }
+}
+
+export interface FotMobSearchResult {
+  id: number;
+  name: string;
+  teamId: number;
+  teamName: string;
+}
+
+/**
+ * FotMob's own name search — bypasses a club's team-roster endpoint entirely,
+ * which matters because that endpoint is frequently null for some clubs
+ * (confirmed live: Shakhtar Donetsk's squad.squad was null, silently hiding
+ * real squad members like Eguinaldo/Marlon Gomes from fetchTeamPlayers no
+ * matter how good the name-matching against them would be). Only useful as
+ * a fallback for a name mantrafootball.org already spells the FotMob way —
+ * it is NOT fuzzy about nicknames itself (confirmed live: searching mantra's
+ * stored "Nicolas Paz" does not surface FotMob's own "Nico Paz" at all), so
+ * callers should still try the normal roster-based match first.
+ */
+export async function searchFotMobPlayer(term: string): Promise<FotMobSearchResult[]> {
+  try {
+    const res = await fetch(
+      `https://www.fotmob.com/api/data/search/suggest?hits=10&lang=en&term=${encodeURIComponent(term)}`,
+      { headers: FOTMOB_HEADERS, cache: 'no-store' },
+    );
+    if (!res.ok) return [];
+    const groups = await res.json() as { title?: { key?: string }; suggestions?: Record<string, unknown>[] }[];
+    const group = groups.find((g) => g.title?.key === 'players') ?? groups[0];
+    const suggestions = group?.suggestions ?? [];
+    return suggestions
+      .filter((s) => s.type === 'player')
+      .map((s) => ({
+        id: Number(s.id),
+        name: String(s.name ?? ''),
+        teamId: Number(s.teamId ?? 0),
+        teamName: String(s.teamName ?? ''),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+const FOTMOB_SHORT_POS_TO_GROUP: Record<string, 'GK' | 'DEF' | 'MID' | 'FWD'> = {
+  GK: 'GK',
+  CB: 'DEF', LB: 'DEF', RB: 'DEF', LWB: 'DEF', RWB: 'DEF',
+  DM: 'MID', CM: 'MID', LM: 'MID', RM: 'MID', AM: 'MID',
+  LW: 'FWD', RW: 'FWD', ST: 'FWD', CF: 'FWD', SS: 'FWD',
+};
+
+/** Primary real-world position (short label + broad group) — used to fill in a
+ *  SquadPlayer built from search results, which don't carry position at all. */
+export async function fetchPlayerPrimaryPosition(
+  playerId: number,
+): Promise<{ label: string; group: 'GK' | 'DEF' | 'MID' | 'FWD' } | null> {
+  try {
+    const res = await fetch(
+      `https://www.fotmob.com/api/data/playerData?id=${playerId}`,
+      { headers: playerDataHeaders(), cache: 'no-store' },
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const label = data?.positionDescription?.primaryPosition?.label as string | undefined;
+    const shortLabel = (data?.positionDescription?.positions as Record<string, unknown>[] | undefined)
+      ?.find((p) => (p.strPos as Record<string, unknown> | undefined)?.label === label)
+      ?.strPosShort as Record<string, unknown> | undefined;
+    const short = String(shortLabel?.label ?? '').toUpperCase();
+    if (!short) return null;
+    return { label: short, group: FOTMOB_SHORT_POS_TO_GROUP[short] ?? 'MID' };
   } catch {
     return null;
   }
@@ -754,15 +869,33 @@ function parseMatchDate(m: Record<string, unknown>): Date {
 }
 
 /**
- * Last 5 appearances this season for the player's own club, across ANY club
- * competition (domestic league, domestic cups, continental) — recentMatches
- * mixes in international caps and prior-season matches, neither of which
- * belong in a "recent form" read: international duty isn't club form, and a
- * player who hasn't played yet this season showing 10-month-old cards/minutes
- * as if current is actively misleading (confirmed on real data — see
- * docs/fotmob-api.md). Filtering to the season window first, then to the
- * most common teamId within that window, keeps every club competition while
- * dropping both of those.
+ * FotMob tags both club pre-season friendlies ("Club Friendlies", leagueId 489)
+ * and international friendlies ("Friendlies", leagueId 114) with "Friendl" in
+ * leagueName — matching on the name rather than a hardcoded ID list, since a
+ * pre-season friendly for the player's own club would otherwise pass the
+ * teamId filter below (confirmed on real data: Arsenal's Aug 2026 friendlies
+ * vs Real Betis/Girona show up exactly like a competitive match otherwise).
+ */
+function isFriendly(m: Record<string, unknown>): boolean {
+  return /friendl/i.test(String(m.leagueName ?? ''));
+}
+
+/**
+ * Last 5 appearances this season for the player's own club, in an official
+ * club competition (domestic league, domestic cups, continental) — recentMatches
+ * mixes in international caps, friendlies, and prior-season matches, none of
+ * which belong in a "recent form" read: international duty and friendlies
+ * aren't competitive club form, and a player who hasn't played yet this
+ * season showing 10-month-old cards/minutes as if current is actively
+ * misleading (confirmed on real data — see docs/fotmob-api.md).
+ *
+ * The player's club is read from `primaryTeam` on this same response (also
+ * used by fetchPlayerCurrentTeam) rather than inferred from which teamId
+ * appears most often in the window — during a summer tournament (confirmed
+ * live against real World Cup 2026 call-ups) a player's *entire* recent
+ * window can be international duty, which would make the national team look
+ * like "the most common team" and let a World Cup run straight through as
+ * if it were club form.
  */
 export async function fetchPlayerRecentMatches(playerId: number): Promise<PlayerRecentMatch[]> {
   try {
@@ -775,18 +908,11 @@ export async function fetchPlayerRecentMatches(playerId: number): Promise<Player
     const raw = data?.recentMatches as Record<string, unknown>[] | null;
     if (!Array.isArray(raw)) return [];
 
+    const myClubTeamId = Number((data?.primaryTeam as Record<string, unknown> | null)?.teamId ?? 0);
     const seasonStart = currentSeasonStart();
-    const thisSeason = raw.filter((m) => parseMatchDate(m) >= seasonStart);
 
-    const teamIdCounts = new Map<number, number>();
-    for (const m of thisSeason) {
-      const tid = Number(m.teamId ?? 0);
-      if (tid > 0) teamIdCounts.set(tid, (teamIdCounts.get(tid) ?? 0) + 1);
-    }
-    const myClubTeamId = Array.from(teamIdCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
-
-    return thisSeason
-      .filter((m) => Number(m.teamId ?? 0) === myClubTeamId)
+    return raw
+      .filter((m) => parseMatchDate(m) >= seasonStart && !isFriendly(m) && Number(m.teamId ?? 0) === myClubTeamId)
       .slice(-5)
       .map((m): PlayerRecentMatch | null => {
         try {

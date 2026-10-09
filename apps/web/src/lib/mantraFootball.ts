@@ -58,7 +58,7 @@ export async function resolveMantraLeagueId(tournamentId: number): Promise<numbe
 interface MantraPlayerRaw {
   id: number;
   name: string;
-  first_name: string;
+  first_name: string | null;
   club: { name: string };
   position_classic_arr: string[];
 }
@@ -89,7 +89,9 @@ export async function fetchMantraTournamentPlayers(tournamentId: number): Promis
     for (const r of rows) {
       players.push({
         id: r.id,
-        fullName: `${r.first_name} ${r.name}`.trim(),
+        // first_name is null for mononym players (e.g. "Eguinaldo") — string-templating
+        // a null value literally produces "null Eguinaldo", so filter it out explicitly.
+        fullName: [r.first_name, r.name].filter((part) => part != null && part !== '').join(' '),
         clubName: r.club?.name ?? '',
         positions: (r.position_classic_arr ?? []) as MantraPosition[],
       });
