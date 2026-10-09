@@ -38,3 +38,11 @@ Thumbs.db
 coverage
 .vercel
 .env*
+
+# TypeScript / Python build artifacts
+*.tsbuildinfo
+__pycache__/
+*.pyc
+
+# Local Claude settings (machine-specific permissions)
+.claude/settings.local.json
