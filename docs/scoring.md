@@ -1,6 +1,6 @@
 # Tour Player Scoring Algorithm
 
-The scoring algorithm lives in `calcScore()` inside `apps/web/src/app/league/[id]/tour/page.tsx`.
+The scoring algorithm is `calcScore()` in `apps/web/src/lib/tourScoring.ts`; formations, out-of-position malus and slot assignment are in `apps/web/src/lib/tourModules.ts`; `page.tsx` under `app/league/[id]/tour/` only loads data and renders. Behaviour is pinned by `tourScoring.test.ts` / `tourModules.test.ts`.
 
 It ranks each squad player so the auto-select can pick the best XI for a matchday tour.
 
@@ -11,7 +11,7 @@ It ranks each squad player so the auto-select can pick the best XI for a matchda
 | Input | Source | Notes |
 |---|---|---|
 | `player` | `SquadPlayer` from MongoDB | Includes `mantraPositions`, `lineupStatus`, `availabilityPct` |
-| `analytics` | `PlayerAnalytics` from `/api/leagues/[id]/analytics` | Season stats from CDN: rating, goals, xG, tackles, CS, saves, minutes, and more |
+| `analytics` | `PlayerAnalytics` from `/api/leagues/[id]/analytics` | Season stats from CDN: rating, goals, xG, tackles, CS, saves, minutes, and more. Also carries `priorSeason` (previous completed season, partial stats) for early-season blending |
 | `fix` | `TeamFixture` from `/api/leagues/[id]/fixtures` | Next fixture with difficulty 1–5 |
 | `odds` | `FixtureOdds` from `/api/matches/[id]/odds` | Decimal odds: home/draw/away |
 | `form` | `PlayerRecentMatch[]` from `/api/leagues/[id]/form` | Last 5 team matches (W/D/L + score) — blended with season rating when ≥3 rated matches |
@@ -23,6 +23,20 @@ It ranks each squad player so the auto-select can pick the best XI for a matchda
 1. **Team endpoint** (`/api/data/teams`) — rating, goals, assists, yellow/red cards
 2. **Rating rankings** (`data.fotmob.com/stats/.../rating.json`) — leagueRank, matchesPlayed, minutesPlayed
 3. **CDN stat lists** (`fetchLeagueAllPlayerStats`) — tackles, interceptions, clearances, xG, shots, chancesCreated, cleanSheets, saves, goalsConceded, foulsCommitted, and more (19 categories total, fetched in parallel and merged into one cache document)
+
+### Early-season blending (previous season)
+
+Early in a season every player's current stats are 0/null, which would make everyone score alike. So counting stats and rating are blended with last season's:
+
+```
+wConf = min(1, matchesPlayed / 4)            // trust in current-season data, ramps 0 → 1 over 4 matches
+pm(cur, prior)  = per-match rate:  cur/matchesPlayed * wConf + prior/priorMatches * (1 - wConf)
+                  (only current or only prior available → that one; neither → 0)
+pmOr(cur, prior, fallback) = pm(...) if either exists, else fallback (e.g. goals/match instead of xG)
+seasonRating = cur * wConf + prior * (1 - wConf)   (cur ?? prior ?? 6.0 when one side is missing)
+```
+
+Every `stat/MP` term below means `pm(analytics.stat, priorSeason.stat)`. Save %, and average minutes per match are blended the same way with `wConf`. `getSquadPriorSeasonStats` (`lib/squadStats.ts`) estimates a missing `matchesPlayed` from minutes (`round(min/90)`).
 
 The `playerData` endpoint (per-player rich stats) is Turnstile-blocked for server-side requests and no longer used in the analytics route.
 
@@ -39,7 +53,7 @@ If `player.lineupStatus === 'injured'` or `'suspended'`, the function immediatel
 ### 1. Rating score (0–∞, typical 0–18)
 
 ```
-seasonRating = analytics.rating ?? 6.0
+seasonRating = blend of analytics.rating and priorSeason.rating (see Early-season blending; 6.0 if neither)
 formRating   = average of last 5 match ratings where minutesPlayed > 30 (null if < 3 rated matches)
 blendedRating = formRating != null ? seasonRating * 0.6 + formRating * 0.4 : seasonRating
 ratingScore  = max(0, (blendedRating - 6.0) * 15)
@@ -234,20 +248,25 @@ effectiveRatingScore = max(0, (effectiveRating - 6.0) * 15)
 
 The malus only reduces the rating component. Goal bonuses, clean sheet bonuses, fixture score, and minutes score are **unaffected** — those are awarded based on the player's actual actions, not their position slot.
 
-### Malus values (`POSITION_MALUS` in `tour/page.tsx`)
+### Malus values (`POSITION_MALUS` in `lib/tourModules.ts` — source of truth)
 
-| Slot position | Player position | Malus |
-|---|---|---|
-| RB / LB | The other of RB/LB | −1.5 |
-| RB / LB | CB | −1.5 |
-| CB | RB or LB | −1.5 |
-| WB | DM or CM | −1.5 |
-| DM | CM | −1.5 |
-| W | AM | −1.5 |
-| FW | ST | −1.5 |
-| ST | FW | −1.5 |
-| Any other cross-group mismatch | | −3.0 |
-| Completely incompatible | | not allowed |
+`POSITION_MALUS[slotPosition][playerPosition]`: `0` = native, `-1.5` = adjacent role, `-3` = stretch, missing = incompatible (not allowed). If a slot accepts several positions (e.g. `DM/CM`) or a player has several, the best (highest) malus wins (`getSlotPenalty`).
+
+| Slot | Native | −1.5 | −3 |
+|---|---|---|---|
+| GK | GK | | |
+| LB | LB | RB, CB | WB |
+| RB | RB | LB, CB | WB |
+| CB | CB | LB, RB | DM |
+| WB | WB | DM, CM | LB, RB |
+| DM | DM | CM | WB, CB |
+| CM | CM | DM | AM |
+| AM | AM | | CM, W, FW |
+| W | W | AM | FW |
+| FW | FW | ST | W, AM |
+| ST | ST | FW | W |
+
+`effectiveScore(breakdown, pen)` recomputes only the rating component with `baseRating + pen` (scaled by `availabilityPct`) and floors the total at 0.
 
 ---
 
@@ -259,7 +278,7 @@ The malus only reduces the rating component. Goal bonuses, clean sheet bonuses, 
 
 For each module, slots are filled with a **constrained-slot-first** greedy approach:
 
-1. Find the unfilled slot with the **fewest eligible remaining players** (most constrained first — prevents deadlock where the only RB gets consumed by a flexible WB/RB slot).
+1. Find the unfilled slot with the **fewest native (malus 0) candidates**, ties broken by fewest total eligible candidates (most constrained first — prevents deadlock where the only RB gets consumed by a flexible WB/RB slot). If any slot has no eligible player at all, the module is infeasible (`null`).
 2. From eligible players for that slot:
    - **If any native players exist** (penalty = 0): assign the highest-scoring one. Out-of-position players are never considered when a native option is available.
    - **Only if no native player remains**: assign the best out-of-position player (scored after applying their malus).
@@ -267,12 +286,9 @@ For each module, slots are filled with a **constrained-slot-first** greedy appro
 
 ### Step 2 — Pick the best module
 
-Modules are ranked by two criteria in order:
+Unless the user pinned a formation chip, every module is assigned and the one with the **highest total `effectiveScore`** wins (sum over the GK and 10 slots; out-of-position players already lose rating points via the malus). Infeasible modules are skipped.
 
-1. **Fewest out-of-position slots** (primary) — a module with zero OOP assignments always beats one with any OOP, regardless of score difference.
-2. **Highest total effective score** (tiebreaker) — among modules with the same OOP count, pick the one whose players score highest with malus applied.
-
-This guarantees that out-of-position play only happens when the squad genuinely has no native alternative, not simply because an OOP player happens to score higher after penalty.
+Earlier versions ranked "fewest out-of-position slots" first; that double-counted the penalty and could pick a worse formation, so it was removed (see the comment in `autoSelect()`).
 
 ### Step 3 — GK
 
