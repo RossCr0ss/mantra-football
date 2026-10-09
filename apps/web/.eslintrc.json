@@ -1,0 +1,30 @@
+{
+  "extends": "next/core-web-vitals",
+  "overrides": [
+    {
+      "files": [
+        "src/components/**/*.{ts,tsx}",
+        "src/app/league/*/analytics/page.tsx",
+        "src/app/league/*/fixtures/page.tsx",
+        "src/app/league/*/tour/page.tsx"
+      ],
+      "plugins": ["@typescript-eslint"],
+      "rules": {
+        "@typescript-eslint/no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              { "name": "@/lib/fotmob", "allowTypeImports": true, "message": "Client code: use `import type`, or `@/lib/fotmob/matches` for fetchMatchOddsClient. Runtime FotMob code is server-only." },
+              { "name": "@/lib/mongodb", "message": "Server-only module." },
+              { "name": "@/lib/injuries", "allowTypeImports": true, "message": "Server-only module." },
+              { "name": "@/lib/suspensionCheck", "allowTypeImports": true, "message": "Server-only; use @/lib/suspensionRules for constants." },
+              { "name": "@/lib/fotmobCache", "allowTypeImports": true, "message": "Server-only module." },
+              { "name": "@/lib/fixturesCache", "allowTypeImports": true, "message": "Server-only module." },
+              { "name": "@/lib/mongoCache", "allowTypeImports": true, "message": "Server-only module." }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
