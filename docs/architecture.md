@@ -46,7 +46,7 @@ mantra-football/
 │   │   ├── fotmob.ts           # barrel → fotmob/{types,http,cdnStats,league,teams,players,matches}.ts — ALL FotMob fetches live there
 │   │   ├── fotmobCache.ts      # MongoDB-backed wrappers for fotmob.ts functions
 │   │   ├── mongoCache.ts       # Generic TTL cache utility (withCache)
-│   │   ├── fixturesCache.ts    # Fixtures + table positions cache (separate from mongoCache)
+│   │   ├── fixturesCache.ts    # Fixtures + table positions (thin wrapper over mongoCache withCache)
 │   │   ├── injuries.ts         # DB override → FotMob fallback for injury info
 │   │   ├── mantraPositions.ts  # Position definitions + FotMob label → Mantra position mapping
 │   │   └── mongodb.ts          # MongoDB client (getDb singleton)
@@ -71,7 +71,7 @@ FotMob API (unofficial)
         │
         ▼
   fotmobCache.ts      ← MongoDB TTL wrappers (6h players, 24h teams, 30m odds)
-  fixturesCache.ts    ← Fixtures + table positions (1h TTL, separate collection)
+  fixturesCache.ts    ← Fixtures + table positions (withCache, collection fixtures_league)
         │
         ▼
   API routes          ← Next.js route handlers assemble + enrich data
@@ -94,8 +94,8 @@ MongoDB is already required for squad persistence. Adding a Redis instance would
 ### Why server components by default?
 FotMob data can be pre-fetched on the server, cutting initial load time and eliminating client-side waterfall. Client components are added only where browser APIs or interactive state are needed (SquadManager, TeamSquadView, tour page, etc.).
 
-### Why is there a separate `fixturesCache.ts` and not just `withCache`?
-Fixtures need to cache a `Map<number, number>` (table positions). MongoDB can't store Maps, so `fixturesCache.ts` handles the serialisation to `Record<string, number>` manually. `withCache` handles this for arrays/objects but the fixture cache predates the generic utility and has different invalidation logic (1h TTL, leagueId key).
+### Why does `fixturesCache.ts` exist if `withCache` does the caching?
+Table positions are a `Map<number, number>`, which MongoDB cannot store. `getLeagueFixturesCached` runs `fetchLeagueData` inside `withCache` and converts positions to/from a plain record; `buildTeamFixtures` (pure) turns matches + positions into per-team fixtures with a difficulty. (It used to carry its own copy of the SWR logic, which bypassed the forced-refresh throttle — found during live testing.)
 
 ### Why does the squad store exist if squads are in MongoDB?
 The Zustand store (`squadStore.ts`) is used only during the **squad builder** flow (`/league/[id]`). It holds the in-progress selection before the user saves. Once saved, the team page and all other pages read directly from MongoDB. `setLeagueId` resets squad state to prevent cross-league player mixing.
@@ -154,4 +154,4 @@ The tactics view (`components/tour/PitchView.tsx`) uses `max-w-sm sm:max-w-xl md
 | `fotmob_all_stats` | `leagueId, seasonId` | All 19 CDN stat categories merged into one doc per league-season (24h TTL) |
 | `fotmob_season` | `leagueId` | Cached primary season ID (24h TTL) |
 | `fotmob_odds` | `matchId` | Cached 1×2 odds (30m TTL) |
-| `fixtures_cache` | `leagueId` | League matches + table positions (1h TTL) |
+| `fixtures_league` | `leagueId` | League matches + table positions (`CACHE_TTL.FIXTURES`; replaces the old `fixtures_cache`) |

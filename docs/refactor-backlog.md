@@ -37,3 +37,11 @@ Removed `fetchPlayerInjuryInfo`, `fetchPlayerSeasonStats` (+ its parsing helpers
 - Team points → goals conversion (72 points = 1 goal, +1 goal per extra 7) — irrelevant for choosing players but relevant if a "projected result" feature is ever added.
 - The **position malus matrix** on the rules page is an image, so `POSITION_MALUS` cannot be verified automatically — compare it by eye after rule changes (the `-1.5` / `-3` steps are confirmed in the text).
 - Bonuses not in `calcScore`: saves (+0.5 for 3–5, +1 for 6+), penalties, cards/maluses — they are only reflected indirectly through xG/rating/stat proxies.
+
+## 10. Findings from live browser testing (2026-10-09, isolated Mongo copy of the real squads)
+- Verified end-to-end: all pages render without console errors; auto-select picks a formation and shows the defence bonus; tour/analytics Refresh send `?refresh=1`; session cache serves reloads; squad POST validation accepts the real stored squads and strips unknown keys.
+- **Fixed:** `getLeagueFixturesCached` had its own copy of the SWR logic and ignored the forced-refresh throttle → now on `withCache`.
+- **Open (behaviour, not a bug of the refactor):** `isBlocked` only looks at the manual `lineupStatus`. A player FotMob flags as injured (e.g. shown in the My Team injury report) can still be auto-selected unless the user also marks `lineupStatus`. Consider treating a live, non-cleared injury as blocked or heavily discounted in auto-select.
+- `favicon.ico` returns 404 (no `public/` by design) — harmless console noise.
+- `.env` still points `MONGODB_URI` at port 27018 while `docker-compose.yml` publishes Mongo on 27028 (see CLAUDE.md) — pass `MONGODB_URI` explicitly or fix `.env`.
+

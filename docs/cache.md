@@ -34,19 +34,9 @@ MongoDB is already running for squad persistence. Adding Redis would increase in
 
 ## Fixtures cache (`fixturesCache.ts`)
 
-This cache is separate from `withCache` because it stores a `Map<number, number>` (table positions) which MongoDB cannot store directly.
+`getLeagueFixturesCached(leagueId, { forceRefresh })` is a thin wrapper over `withCache` (collection **`fixtures_league`**, `CACHE_TTL.FIXTURES`) — it has no cache logic of its own, so SWR, stale-on-failure and the forced-refresh throttle behave exactly as above. Mongo cannot store a `Map`, so the stored document is `{ leagueId, cachedAt, data: { tablePositions: Record<string, number>, matches, currentRound } }` and the wrapper converts back to a `Map`. If FotMob fails and nothing is cached it returns an empty result (never throws); an empty FotMob answer is never stored.
 
-```typescript
-interface LeagueCacheDoc {
-  leagueId: number;
-  tablePositions: Record<string, number>;  // serialised Map
-  matches: LeagueMatch[];
-  currentRound: string | null;
-  cachedAt: Date;
-}
-```
-
-**TTL:** `CACHE_TTL.FIXTURES` (SWR, same semantics as above). When stale, `getLeagueFixturesCached` calls `fetchLeagueData` and upserts the doc.
+> The older `fixtures_cache` collection (top-level `matches`/`tablePositions`) is no longer read. It can be dropped: `db.fixtures_cache.drop()`.
 
 **`buildTeamFixtures` is pure:** it takes pre-fetched `matches` and `tablePositions` as arguments, with no I/O. This makes it easy to test and reuse.
 
@@ -92,7 +82,7 @@ db.fotmob_players.deleteOne({ teamId: 10260 })
 db.fotmob_stats.deleteOne({ teamId: 10260 })
 
 // Clear fixtures for a league
-db.fixtures_cache.deleteOne({ leagueId: 441 })
+db.fixtures_league.deleteOne({ leagueId: 441 })
 
 // Clear odds for a match
 db.fotmob_odds.deleteOne({ matchId: "4193490" })

@@ -1,27 +1,22 @@
-import { getDb } from './mongodb';
 import { fetchLeagueData } from './fotmob';
-import { CACHE_TTL } from './mongoCache';
+import { CACHE_TTL, withCache, getCachedAt } from './mongoCache';
 import type { LeagueMatch, TeamFixture } from './fotmob';
 
-interface LeagueCacheDoc {
-  leagueId: number;
+/** Collection for league schedule + table positions (shape differs from the old `fixtures_cache`). */
+const FIXTURES_COLLECTION = 'fixtures_league';
+
+/** What is stored (Mongo cannot store a Map, so table positions are a plain record). */
+interface LeagueFixtureData {
   tablePositions: Record<string, number>;
   matches: LeagueMatch[];
   currentRound: string | null;
-  cachedAt: Date;
 }
 
 /**
- * Returns all league matches + table positions using a per-league MongoDB SWR cache.
- *
- * | Cache age          | Behaviour                                      |
- * |--------------------|------------------------------------------------|
- * | < 30 min (fresh)   | Serve immediately, no action                   |
- * | 30 min – 6 h       | Serve immediately + background refresh         |
- * | > 6 h or missing   | Synchronous fetch, then store & serve          |
- * | Fetch fails + stale| Return stale data (graceful degradation)       |
- *
- * Pass `forceRefresh: true` to skip TTL and always fetch from FotMob.
+ * Returns all league matches + table positions through the shared SWR cache (`withCache`,
+ * `CACHE_TTL.FIXTURES`): fresh → served; stale → served + background refresh; too old → fetched.
+ * `forceRefresh` is throttled by `withCache` (MIN_FORCE_REFRESH_MS). If FotMob fails and nothing is
+ * cached, an empty result is returned instead of throwing; an empty FotMob answer is never cached.
  */
 export async function getLeagueFixturesCached(
   leagueId: number,
@@ -32,89 +27,30 @@ export async function getLeagueFixturesCached(
   currentRound: string | null;
   cachedAt: Date | null;
 }> {
-  const db = await getDb();
-  const col = db.collection<LeagueCacheDoc>('fixtures_cache');
-
-  if (!forceRefresh) {
-    const cached = await col.findOne({ leagueId });
-
-    if (cached?.matches && cached.tablePositions) {
-      const ageMs = Date.now() - cached.cachedAt.getTime();
-
-      if (ageMs < CACHE_TTL.FIXTURES.freshMs) {
-        return {
-          matches: cached.matches,
-          tablePositions: positionsFromRecord(cached.tablePositions),
-          currentRound: cached.currentRound ?? null,
-          cachedAt: cached.cachedAt,
-        };
-      }
-
-      if (ageMs < CACHE_TTL.FIXTURES.staleMs) {
-        // Stale-while-revalidate: respond instantly, refresh in background
-        void fetchLeagueData(leagueId)
-          .then(({ tablePositions, matches, currentRound }) =>
-            col.updateOne(
-              { leagueId },
-              {
-                $set: {
-                  leagueId,
-                  tablePositions: positionsToRecord(tablePositions),
-                  matches,
-                  currentRound,
-                  cachedAt: new Date(),
-                },
-              },
-              { upsert: true },
-            ),
-          )
-          .catch(() => { /* silent — stale data keeps serving */ });
-
-        return {
-          matches: cached.matches,
-          tablePositions: positionsFromRecord(cached.tablePositions),
-          currentRound: cached.currentRound ?? null,
-          cachedAt: cached.cachedAt,
-        };
-      }
-    }
-  }
-
-  // Too stale, missing, or forceRefresh — fetch synchronously.
-  let result: Awaited<ReturnType<typeof fetchLeagueData>>;
+  let data: LeagueFixtureData;
   try {
-    result = await fetchLeagueData(leagueId);
+    data = await withCache<LeagueFixtureData>(
+      FIXTURES_COLLECTION,
+      { leagueId },
+      CACHE_TTL.FIXTURES,
+      async () => {
+        const { tablePositions, matches, currentRound } = await fetchLeagueData(leagueId);
+        // fetchLeagueData returns empty data on HTTP errors — don't let that overwrite/seed the cache.
+        if (matches.length === 0 && tablePositions.size === 0) throw new Error('FotMob returned no league data');
+        return { tablePositions: positionsToRecord(tablePositions), matches, currentRound };
+      },
+      { forceRefresh },
+    );
   } catch {
-    // Graceful degradation
-    const cached = await col.findOne({ leagueId });
-    if (cached?.matches) {
-      return {
-        matches: cached.matches,
-        tablePositions: positionsFromRecord(cached.tablePositions),
-        currentRound: cached.currentRound ?? null,
-        cachedAt: cached.cachedAt,
-      };
-    }
     return { matches: [], tablePositions: new Map(), currentRound: null, cachedAt: null };
   }
 
-  const { tablePositions, matches, currentRound } = result;
-  const cachedAt = new Date();
-  await col.updateOne(
-    { leagueId },
-    {
-      $set: {
-        leagueId,
-        tablePositions: positionsToRecord(tablePositions),
-        matches,
-        currentRound,
-        cachedAt,
-      },
-    },
-    { upsert: true },
-  );
-
-  return { matches, tablePositions, currentRound, cachedAt };
+  return {
+    matches: data.matches,
+    tablePositions: positionsFromRecord(data.tablePositions),
+    currentRound: data.currentRound ?? null,
+    cachedAt: await getCachedAt(FIXTURES_COLLECTION, { leagueId }),
+  };
 }
 
 /**

@@ -1,8 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./mongodb', () => ({ getDb: vi.fn() })); // importing fixturesCache must not need MONGODB_URI
+type Doc = { data: unknown; cachedAt: Date; [k: string]: unknown };
+let doc: Doc | null = null;
+const col = {
+  findOne: vi.fn(async () => doc),
+  updateOne: vi.fn(async (_f: unknown, u: { $set: Doc }) => { doc = u.$set; }),
+};
+vi.mock('./mongodb', () => ({ getDb: async () => ({ collection: () => col }) })); // no MONGODB_URI needed
+vi.mock('./fotmob', () => ({ fetchLeagueData: vi.fn() }));
 
-import { buildTeamFixtures } from './fixturesCache';
+import { fetchLeagueData } from './fotmob';
+import { buildTeamFixtures, getLeagueFixturesCached } from './fixturesCache';
+import { MIN_FORCE_REFRESH_MS } from './mongoCache';
 import { makeMatch } from './testUtils';
 
 // 20-team table: team id N sits at position N
@@ -34,5 +43,63 @@ describe('buildTeamFixtures', () => {
     ];
     expect(buildTeamFixtures(10, matches, positions, '1')[0].matchId).toBe('next');
     expect(buildTeamFixtures(10, matches, positions, null, 2).map((f) => f.matchId)).toEqual(['next', 'later']);
+  });
+});
+
+describe('getLeagueFixturesCached', () => {
+  const fetchMock = vi.mocked(fetchLeagueData);
+  const league = () => ({
+    tablePositions: new Map([[1, 1], [2, 2]]),
+    matches: [makeMatch({ matchId: 'a', homeId: 1, awayId: 2 })],
+    currentRound: '7',
+  });
+
+  beforeEach(() => { doc = null; vi.clearAllMocks(); });
+
+  it('fetches on a miss, stores a Mongo-safe doc and returns a Map of table positions with cachedAt', async () => {
+    fetchMock.mockResolvedValue(league());
+    const r = await getLeagueFixturesCached(47);
+    expect(r.tablePositions).toEqual(new Map([[1, 1], [2, 2]]));
+    expect(r.matches).toHaveLength(1);
+    expect(r.currentRound).toBe('7');
+    expect(r.cachedAt).toBeInstanceOf(Date);
+    expect((doc!.data as { tablePositions: unknown }).tablePositions).toEqual({ '1': 1, '2': 2 });
+  });
+
+  it('serves a fresh cache without fetching again', async () => {
+    fetchMock.mockResolvedValue(league());
+    await getLeagueFixturesCached(47);
+    await getLeagueFixturesCached(47);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('throttles forceRefresh right after a refresh, but honours it once the doc is older', async () => {
+    fetchMock.mockResolvedValue(league());
+    await getLeagueFixturesCached(47);
+    await getLeagueFixturesCached(47, { forceRefresh: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);                       // throttled
+
+    doc!.cachedAt = new Date(Date.now() - MIN_FORCE_REFRESH_MS - 1000);
+    await getLeagueFixturesCached(47, { forceRefresh: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);                       // allowed
+  });
+
+  it('returns an empty result (no throw) when FotMob fails and nothing is cached', async () => {
+    fetchMock.mockRejectedValue(new Error('down'));
+    expect(await getLeagueFixturesCached(47)).toEqual({ matches: [], tablePositions: new Map(), currentRound: null, cachedAt: null });
+  });
+
+  it('never caches an empty FotMob answer (HTTP error looks like empty data)', async () => {
+    fetchMock.mockResolvedValue({ tablePositions: new Map(), matches: [], currentRound: null });
+    expect((await getLeagueFixturesCached(47)).matches).toEqual([]);
+    expect(doc).toBeNull();
+  });
+
+  it('serves stale data when a refresh fails', async () => {
+    fetchMock.mockResolvedValue(league());
+    await getLeagueFixturesCached(47);
+    doc!.cachedAt = new Date(Date.now() - 24 * 3_600_000);            // older than staleMs
+    fetchMock.mockRejectedValue(new Error('down'));
+    expect((await getLeagueFixturesCached(47)).matches).toHaveLength(1);
   });
 });
