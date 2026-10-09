@@ -1,6 +1,6 @@
 # FotMob API Reference
 
-FotMob is used as the primary data source. There is no API key — requests use a standard browser User-Agent. All calls go through `apps/web/src/lib/fotmob.ts`. Never call FotMob URLs directly from components or API routes.
+FotMob is used as the primary data source. There is no API key — requests use a standard browser User-Agent. All calls go through `apps/web/src/lib/fotmob/*` (barrel `lib/fotmob.ts`). Never call FotMob URLs directly from components or API routes.
 
 ## Base URLs
 
@@ -38,7 +38,7 @@ Playoff/group leagues (Belgian Pro League):
 }
 ```
 
-`extractTableRows()` in `fotmob.ts` handles both shapes automatically.
+`extractTableRows()` in `lib/fotmob/league.ts` handles both shapes automatically.
 
 **Match structure:**
 ```json
@@ -123,7 +123,7 @@ These players have no season stats (rating, goals, assists all null/0) since tha
 
 ### GET `/api/data/playerData?id={playerId}`
 
-Used by: `fetchPlayerInjuryInfo`, `fetchPlayerSeasonStats`, `fetchPlayerRichStats`
+Used by: `fetchPlayerRichStats` (the former `fetchPlayerInjuryInfo` / `fetchPlayerSeasonStats` were removed as unused — see git history)
 
 Returns detailed player data including injury information and per-player season stats with percentile ranks.
 
@@ -145,9 +145,9 @@ Returns detailed player data including injury information and per-player season 
 
 If `injuryInformation` is absent or null, the player is not injured. The function returns `null` in that case.
 
-**⚠ Cloudflare Turnstile protection:** All server-side requests (Node.js, curl) receive `{"error":"Verification required","code":"TURNSTILE_REQUIRED"}`. This affects `fetchPlayerSeasonStats` and `fetchPlayerRichStats` — those functions will silently fail and their cache wrappers (`fotmob_player_stats`, `fotmob_rich_stats`) will remain empty.
+**⚠ Cloudflare Turnstile protection:** All server-side requests (Node.js, curl) receive `{"error":"Verification required","code":"TURNSTILE_REQUIRED"}`. This affects `fetchPlayerRichStats` — it will silently fail and its cache collection (`fotmob_rich_stats`) will remain empty.
 
-Injury fetching (`fetchPlayerInjuryInfo`) is called from the team page server component and appears to work in some regions/configurations. If it stops working, set `FOTMOB_COOKIE` env var with a valid browser cookie to bypass Turnstile.
+Live injury data is read through `getPlayerInjury()` in `lib/injuries.ts`. If playerData fetches stop working, set `FOTMOB_COOKIE` env var with a valid browser cookie to bypass Turnstile.
 
 **Season stats structure** (from `firstSeasonStats.statsSection`):
 ```json
@@ -227,7 +227,7 @@ Same CDN host, returns per-player values for a specific stat. Used by `fetchLeag
 
 **⚠ Key naming matters:** Keys are not intuitive. Wrong keys silently return 403. The correct names were discovered by inspecting `teams.stats.players[].name` on the teams endpoint.
 
-**All 19 supported stat keys** (`CDN_STAT_CONFIG` in `fotmob.ts`):
+**All 19 supported stat keys** (`CDN_STAT_CONFIG` in `lib/fotmob/cdnStats.ts`):
 
 | CDN key | `PlayerSeasonStats` field | Use `SubStatValue`? |
 |---|---|---|
@@ -300,7 +300,7 @@ All image URLs are constructed from IDs — never stored in the database.
 | Ukrainian clubs: `squad.squad = null` | "No players found" | `fetchTeamPlayersFromLineup` fallback |
 | Odds are geo-restricted | 404/block client-side | Server-side only, proxy via `/api/matches/[id]/odds` |
 | Ukrainian rating.json → 403 | No league rank data | Silently returns empty Map; players show `leagueRank: null` |
-| `playerData` endpoint → Turnstile | `fetchPlayerSeasonStats`/`fetchPlayerRichStats` fail | CDN stats (`fotmob_all_stats`) cover most fields; set `FOTMOB_COOKIE` for remainder |
+| `playerData` endpoint → Turnstile | `fetchPlayerRichStats` fails | CDN stats (`fotmob_all_stats`) cover most fields; set `FOTMOB_COOKIE` for remainder |
 | Wrong CDN stat key names → 403 | Stats remain null | Use exact keys from `CDN_STAT_CONFIG` — not guessed names |
 | `ParticiantId` is a typo in FotMob API | Code looks like a typo | It's correct — FotMob's field is misspelled |
 | `primarySeasonId` is a number in JSON | Wrong type if used as string | Always `String(seasonId)` when passing to stat endpoints |

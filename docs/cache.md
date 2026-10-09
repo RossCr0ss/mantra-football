@@ -1,11 +1,9 @@
 # Cache Strategy
 
-The app has two caching layers:
+There is **one** caching layer: the MongoDB SWR cache. All `fetch()` calls in `fotmob.ts` / `mantraFootball.ts` use `cache: 'no-store'` (no Next.js fetch/ISR cache), so every MongoDB miss goes straight to FotMob.
 
-1. **Next.js fetch cache** — built-in, per-request ISR, used in `fotmob.ts` raw functions
-2. **MongoDB TTL cache** — explicit, persistent across restarts, used in `fotmobCache.ts` + `fixturesCache.ts`
-
-API routes always go through the MongoDB layer. Server components may use either.
+- API routes always go through the MongoDB layer (`fotmobCache.ts`, `fixturesCache.ts`, `mantraFootballCache.ts`).
+- Server pages that call raw `fotmob.ts` functions are **uncached** — use a `*Cached` wrapper instead.
 
 ---
 
@@ -15,70 +13,22 @@ MongoDB is already running for squad persistence. Adding Redis would increase in
 
 ---
 
-## Layer 1 — Next.js fetch cache (`fotmob.ts`)
+## MongoDB stale-while-revalidate cache (`mongoCache.ts`)
 
-Every `fetch()` call in `fotmob.ts` includes `next: { revalidate: N }`:
+`withCache(collection, filter, ttl, fetcher, { forceRefresh })` where `ttl = { freshMs, staleMs }`:
 
-```typescript
-fetch(url, { headers: FOTMOB_HEADERS, next: { revalidate: 3600 } })
-```
-
-This uses Next.js ISR (Incremental Static Regeneration) to cache responses at the HTTP layer. It is process-local — lost on server restart.
-
-| Function | Revalidate |
+| Cached doc age | Behaviour |
 |---|---|
-| `fetchLeagueTeams` | 3600s (1h) |
-| `fetchTeamPlayers` | 3600s (1h) |
-| `fetchLeagueRatingStats` | 3600s (1h) |
-| `fetchLeagueStatsList` | 3600s (1h) |
-| `fetchLeagueSeasonId` | 86400s (24h) |
-| `fetchMatchOdds` | 1800s (30m) |
-| `fetchLeagueData` | 3600s (1h) |
+| `< freshMs` | Serve immediately |
+| `freshMs → staleMs` | Serve immediately + deduplicated silent background refresh |
+| `> staleMs` or no doc | Synchronous fetch, store, serve |
+| Fetch fails and a stale doc exists | Serve stale (graceful degradation) |
 
-This layer protects against cache misses on the MongoDB layer (e.g., after a restart) by preventing thundering-herd FotMob requests.
+`forceRefresh: true` skips all checks (UI "Refresh" button, `?refresh=1`). An empty-array doc is always treated as a miss (legacy Ukrainian-squad bug).
 
----
+**TTL values are defined only in `CACHE_TTL` in `apps/web/src/lib/mongoCache.ts` — read the code, they are not repeated here** (keys: `TEAMS`, `PLAYERS`, `RATINGS`, `ODDS`, `SEASON`, `FIXTURES`, `INJURIES`, `MANTRA_POSITIONS`, `PLAYER_TEAM`, `MATCH_CARDS`). Utilities: `deleteCache`, `getCachedAt` (for "last updated" UI).
 
-## Layer 2 — MongoDB TTL cache (`mongoCache.ts`)
-
-`withCache<T>(collection, filter, ttlMs, fetcher)` is the generic utility:
-
-```typescript
-export async function withCache<T>(
-  collection: string,          // MongoDB collection name
-  filter: Record<string, unknown>,  // document key (e.g. { leagueId: 47 })
-  ttlMs: number,               // how long the cache is valid
-  fetcher: () => Promise<T>,   // called on miss or stale
-): Promise<T>
-```
-
-**Hit path:** document exists AND `cachedAt > staleThreshold` AND data is not an empty array → returns `data` immediately.
-
-**Miss path:** calls `fetcher()`, upserts `{ ...filter, data, cachedAt: new Date() }`.
-
-### Empty array cache miss fix
-
-A known FotMob issue: before the `fetchTeamPlayersFromLineup` fallback was added, some Ukrainian teams returned `[]` from `fetchTeamPlayers`. These empty arrays were cached, and subsequent requests kept serving the empty cache.
-
-Fix in `withCache`:
-```typescript
-const isEmpty = Array.isArray(cached?.data) && (cached.data as unknown[]).length === 0;
-if (cached && cached.cachedAt > staleThreshold && !isEmpty) {
-  return cached.data;
-}
-```
-
-An empty array is treated as a cache miss and triggers a fresh fetch.
-
-### TTL constants (`CACHE_TTL` in `mongoCache.ts`)
-
-| Key | Value | Collection(s) | Reasoning |
-|---|---|---|---|
-| `TEAMS` | 24h | `fotmob_teams` | Teams change only on transfer window open/close |
-| `PLAYERS` | 6h | `fotmob_players`, `fotmob_stats`, `fotmob_player_stats`, `fotmob_form`, `fotmob_rich_stats` | Daily transfers / injuries can affect squad |
-| `ODDS` | 30m | `fotmob_odds` | Odds shift significantly in the hours before kick-off |
-| `RATINGS` | 24h | `fotmob_ratings`, `fotmob_stat_list`, `fotmob_all_stats` | FotMob updates CDN stats ~weekly |
-| `SEASON` | 24h | `fotmob_season` | Primary season ID changes once per season |
+> Caveat: the background refresh is a fire-and-forget promise; on serverless hosts (Vercel) it may be cut off after the response. Self-hosted/Docker is fine.
 
 ---
 
@@ -96,7 +46,7 @@ interface LeagueCacheDoc {
 }
 ```
 
-**TTL:** 1 hour, hardcoded. After 1 hour, `getLeagueFixturesCached` calls `fetchLeagueData` and upserts the new doc.
+**TTL:** `CACHE_TTL.FIXTURES` (SWR, same semantics as above). When stale, `getLeagueFixturesCached` calls `fetchLeagueData` and upserts the doc.
 
 **`buildTeamFixtures` is pure:** it takes pre-fetched `matches` and `tablePositions` as arguments, with no I/O. This makes it easy to test and reuse.
 
@@ -108,17 +58,15 @@ All expensive FotMob calls used in API routes go through this module. It wraps `
 
 | Function | Collection | Key | TTL |
 |---|---|---|---|
-| `getLeagueTeamsCached(leagueId)` | `fotmob_teams` | `{ leagueId }` | TEAMS 24h |
-| `getTeamPlayersCached(teamId, teamName)` | `fotmob_players` | `{ teamId }` | PLAYERS 6h |
-| `getTeamPlayerStatsCached(teamId, teamName)` | `fotmob_stats` | `{ teamId }` | PLAYERS 6h |
-| `getLeagueRatingStatsCached(leagueId, seasonId)` | `fotmob_ratings` | `{ leagueId, seasonId }` | RATINGS 24h |
-| `getLeagueSeasonIdCached(leagueId)` | `fotmob_season` | `{ leagueId }` | SEASON 24h |
-| `getMatchOddsCached(matchId)` | `fotmob_odds` | `{ matchId }` | ODDS 30m |
-| `getLeagueAllPlayerStatsCached(leagueId, seasonId)` | `fotmob_all_stats` | `{ leagueId, seasonId }` | RATINGS 24h |
-| `getLeagueStatsListCached(leagueId, seasonId, statKey)` | `fotmob_stat_list` | `{ leagueId, seasonId, statKey }` | RATINGS 24h |
-| `getPlayerSeasonStatsCached(playerId)` | `fotmob_player_stats` | `{ playerId }` | PLAYERS 6h |
-| `getPlayerFormCached(playerId)` | `fotmob_form` | `{ playerId }` | INJURIES 1h |
-| `getPlayerRichStatsCached(playerId)` | `fotmob_rich_stats` | `{ playerId }` | PLAYERS 6h |
+| `getLeagueTeamsCached(leagueId)` | `fotmob_teams` | `{ leagueId }` | TEAMS |
+| `getTeamPlayersCached(teamId, teamName)` | `fotmob_players` | `{ teamId }` | PLAYERS |
+| `getTeamPlayerStatsCached(teamId, teamName)` | `fotmob_stats` | `{ teamId }` | PLAYERS |
+| `getLeagueRatingStatsCached(leagueId, seasonId)` | `fotmob_ratings` | `{ leagueId, seasonId }` | RATINGS |
+| `getLeagueSeasonIdCached(leagueId)` | `fotmob_season` | `{ leagueId }` | SEASON |
+| `getMatchOddsCached(matchId)` | `fotmob_odds` | `{ matchId }` | ODDS |
+| `getLeagueAllPlayerStatsCached(leagueId, seasonId)` | `fotmob_all_stats` | `{ leagueId, seasonId }` | RATINGS |
+| `getPlayerFormCached(playerId)` | `fotmob_form` | `{ playerId }` | INJURIES |
+| `getPlayerRichStatsCached(playerId)` | `fotmob_rich_stats` | `{ playerId }` | PLAYERS |
 
 ### Map serialisation
 
@@ -157,7 +105,6 @@ db.fotmob_stat_list.deleteMany({ leagueId: 441 })
 db.fotmob_all_stats.deleteMany({ leagueId: 441 })
 
 // Clear per-player enrichment caches (form, rich stats, player season stats)
-db.fotmob_player_stats.deleteOne({ playerId: 976428 })
 db.fotmob_form.deleteOne({ playerId: 976428 })
 db.fotmob_rich_stats.deleteOne({ playerId: 976428 })
 ```
@@ -166,7 +113,7 @@ db.fotmob_rich_stats.deleteOne({ playerId: 976428 })
 
 ## Adding a new cached function
 
-1. Add the raw fetch function to `fotmob.ts` with `next: { revalidate: N }`.
+1. Add the raw fetch function to `fotmob.ts` using `fotmobFetch()` (`cache: 'no-store'` + timeout).
 2. Add a cached wrapper in `fotmobCache.ts` using `withCache`.
 3. Choose or add a TTL constant in `CACHE_TTL` (`mongoCache.ts`).
 4. If the return type contains a `Map`, serialise to array before storing (see existing examples).

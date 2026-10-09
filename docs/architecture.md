@@ -43,7 +43,7 @@ mantra-football/
 │   │   └── page.tsx                     # League selector home
 │   ├── components/             # Shared React components
 │   ├── lib/
-│   │   ├── fotmob.ts           # FotMob API — ALL external fetches live here
+│   │   ├── fotmob.ts           # barrel → fotmob/{types,http,cdnStats,league,teams,players,matches}.ts — ALL FotMob fetches live there
 │   │   ├── fotmobCache.ts      # MongoDB-backed wrappers for fotmob.ts functions
 │   │   ├── mongoCache.ts       # Generic TTL cache utility (withCache)
 │   │   ├── fixturesCache.ts    # Fixtures + table positions cache (separate from mongoCache)
@@ -67,7 +67,7 @@ mantra-football/
 FotMob API (unofficial)
         │
         ▼
-  fotmob.ts           ← Single module, all external HTTP calls
+  lib/fotmob/*        ← Only place with FotMob HTTP calls (barrel: fotmob.ts)
         │
         ▼
   fotmobCache.ts      ← MongoDB TTL wrappers (6h players, 24h teams, 30m odds)
@@ -152,7 +152,6 @@ The tactics view in `tour/page.tsx` uses `max-w-sm sm:max-w-xl md:max-w-2xl` so 
 | `fotmob_stats` | `teamId` | Cached Map<playerId, PlayerSeasonStats> serialised as array (6h TTL) |
 | `fotmob_ratings` | `leagueId, seasonId` | Cached league rating rankings (24h TTL) |
 | `fotmob_all_stats` | `leagueId, seasonId` | All 19 CDN stat categories merged into one doc per league-season (24h TTL) |
-| `fotmob_stat_list` | `leagueId, seasonId, statKey` | Single stat list per key — available for ad-hoc use (24h TTL) |
 | `fotmob_season` | `leagueId` | Cached primary season ID (24h TTL) |
 | `fotmob_odds` | `matchId` | Cached 1×2 odds (30m TTL) |
 | `fixtures_cache` | `leagueId` | League matches + table positions (1h TTL) |

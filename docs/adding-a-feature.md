@@ -10,7 +10,7 @@ Common patterns for extending the app without breaking existing behaviour.
 
 ### Step 1 — Add to `PlayerSeasonStats`
 
-In `apps/web/src/lib/fotmob.ts`:
+In `apps/web/src/lib/fotmob/types.ts` (interface) and `lib/fotmob/cdnStats.ts` / `players.ts` (parsing):
 
 ```typescript
 export interface PlayerSeasonStats {
@@ -21,7 +21,7 @@ export interface PlayerSeasonStats {
 
 ### Step 2 — Add to `CDN_STAT_CONFIG`
 
-In `fotmob.ts`, extend `CDN_STAT_CONFIG` with the correct CDN key:
+In `lib/fotmob/cdnStats.ts`, extend `CDN_STAT_CONFIG` with the correct CDN key:
 
 ```typescript
 const CDN_STAT_CONFIG = [
@@ -82,11 +82,11 @@ When building any UI that lists players, follow these conventions:
 
 ## Adding a new FotMob function
 
-1. Add raw function to `fotmob.ts` with `next: { revalidate: N }` on every `fetch()` call
+1. Add raw function to the matching `lib/fotmob/*.ts` file using `fotmobFetch()` from `fotmob/http.ts` for every request (headers, `no-store`, timeout; MongoDB is the only cache layer)
 2. Add a MongoDB-cached wrapper in `fotmobCache.ts` using `withCache`
 3. Choose appropriate TTL from `CACHE_TTL` in `mongoCache.ts`, or add a new constant
 4. If returning a `Map`, serialise to array for MongoDB storage (see existing examples in `fotmobCache.ts`)
-5. Update the FotMob functions table in `CLAUDE.md`
+5. Update the FotMob functions table in `apps/web/src/lib/CLAUDE.md`
 6. Add the endpoint to `docs/fotmob-api.md` with response shape and any quirks
 
 ---

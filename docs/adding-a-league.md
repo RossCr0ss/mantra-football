@@ -49,7 +49,7 @@ If this returns `null` for most clubs (like Ukrainian Premier League), the `fetc
 
 ## 3. Add to the LEAGUES constant
 
-Open `apps/web/src/lib/fotmob.ts` and add to the `LEAGUES` array:
+Open `apps/web/src/lib/leagues.ts` and add to the `LEAGUES` array:
 
 ```typescript
 {
@@ -60,6 +60,7 @@ Open `apps/web/src/lib/fotmob.ts` and add to the `LEAGUES` array:
   primaryColor: '#d00027',    // used for section header badges
   secondaryColor: '#000000',
   logoUrl: 'https://images.fotmob.com/image_resources/logo/leaguelogo/130.png',
+  mantraTournamentId: 3,       // mantrafootball.org tournament id — see docs/mantrafootball-api.md
 },
 ```
 
@@ -85,7 +86,7 @@ Also test stat-specific endpoints (`cleansheet.json`, `expectedgoals.json`, etc.
 ## 5. Test end-to-end
 
 1. Start local dev: `docker compose up mongo -d && yarn dev`
-2. Open `http://localhost:3000` — new league should appear on the home page
+2. Open `http://localhost:3001` — new league should appear on the home page
 3. Click the league → squad builder should show teams
 4. Add a few players → go to Analytics, Fixtures, Tour
 5. Check browser console and server logs for any FotMob errors

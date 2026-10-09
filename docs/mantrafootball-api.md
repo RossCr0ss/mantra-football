@@ -10,7 +10,7 @@ mantrafootball.org is the actual fantasy game this app supports. It's used as th
 
 ## Tournament IDs (stable, not seasonal)
 
-| Tournament ID | Country | Our `LEAGUES` id (`fotmob.ts`) |
+| Tournament ID | Country | Our `LEAGUES` id (`leagues.ts`) |
 |---|---|---|
 | 1 | Italy | 55 (Serie A) |
 | 2 | England | 47 (Premier League) |
