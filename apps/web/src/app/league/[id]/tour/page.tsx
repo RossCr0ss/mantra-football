@@ -15,6 +15,7 @@ import type { PlayerRecentMatch } from '@/lib/fotmob';
 import { POSITION_ORDER, POSITION_SECTIONS, effectivePositionGroup } from '@/lib/positionGroups';
 import { MODULES, effectiveScore, enrichPlayers, pickBestModule, type EnrichedPlayer } from '@/lib/tourModules';
 import { isBlocked } from '@/lib/tourScoring';
+import { applyLiveInjuries } from '@/lib/liveInjuries';
 import { fetchJsonCached, CACHE_KEY } from '@/lib/clientCache';
 import { PitchView } from '@/components/tour/PitchView';
 import { MainCard, SquadRow, StatBadge, TourSkeleton } from '@/components/tour/TourCards';
@@ -78,14 +79,16 @@ export default function TourPage() {
 
     Promise.all([
       fetch(`/api/squad?leagueId=${leagueId}`).then((r) => r.json()),
+      // Live injuries are not session-cached (the user can mark players "Healed" on other pages); a failure is non-fatal.
+      fetch(`/api/leagues/${leagueId}/injuries`).then((r) => (r.ok ? r.json() : { injuries: {} })).catch(() => ({ injuries: {} })),
       fetchJsonCached<{ fixtures?: Record<number, TeamFixture[]> }>(
         CACHE_KEY.fixtures(leagueId), `/api/leagues/${leagueId}/fixtures`, { refresh },
       ),
       fetchJsonCached<{ players?: PlayerAnalytics[] }>(
         CACHE_KEY.analytics(leagueId), `/api/leagues/${leagueId}/analytics`, { refresh },
       ),
-    ]).then(([squadData, fixtureData, analyticsData]) => {
-      const loadedSquad: SquadPlayer[] = squadData.players ?? [];
+    ]).then(([squadData, injuryData, fixtureData, analyticsData]) => {
+      const loadedSquad: SquadPlayer[] = applyLiveInjuries(squadData.players ?? [], injuryData.injuries ?? {});
       const loadedFixtures: Record<number, TeamFixture[]> = fixtureData.fixtures ?? {};
       const loadedAnalytics: PlayerAnalytics[] = analyticsData.players ?? [];
 

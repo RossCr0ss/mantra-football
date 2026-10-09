@@ -23,6 +23,12 @@ A hard block. Set when a player **cannot play** regardless of other factors.
 
 Players with `lineupStatus` set can still be **manually** added to the main XI by clicking them (the hard block only affects auto-select).
 
+### Live injuries (tour page only)
+
+`lineupStatus` is a manual field, but the tour page also overlays **live injury data** (`GET /api/leagues/[id]/injuries` → `applyLiveInjuries` in `lib/liveInjuries.ts`): a player with an *active* injury and no manual `lineupStatus` is treated as `injured` (`lineupStatusSource: 'auto'`) — excluded from auto-select, INJ badge, score −999. Nothing is written to the database.
+
+"Active" (`isInjuryActive`, `lib/injuryDate.ts`): there is an injury record (manual override or FotMob's `injured` flag) that is **not** `cleared` and whose `expectedReturnDate`, if any, is **after today**. So the way to put such a player back in play is the **Healed** button (My Team / Injuries pages), or a return date of today or earlier on a manual override. A manual `lineupStatus` (`injured` / `suspended`) always takes precedence. The live data comes through the cached injury lookup, so FotMob changes appear with the usual cache delay.
+
 ### `availabilityPct`
 
 A soft signal. Set when a player **may** play but with reduced expected minutes.

@@ -10,6 +10,7 @@ Route handlers are thin: parse id → call a `*Cached` function (`lib/fotmobCach
 | `/api/leagues/[id]/analytics` | GET | Season stats for saved squad (team stats + rating + 19 CDN categories via `getLeagueAllPlayerStatsCached`); exports `PlayerAnalytics` type |
 | `/api/leagues/[id]/fixtures` | GET | Upcoming fixture per squad team (`fixturesCache`) |
 | `/api/leagues/[id]/form` | GET | Recent matches per squad player |
+| `/api/leagues/[id]/injuries` | GET | Active injuries of the saved squad `{ injuries: Record<playerId, PlayerInjuryInfo> }` (override → live FotMob flag; healthy players omitted; "healed" overrides are included with `cleared: true`, so clients must filter with `isInjuryActive`). Used by the tour page via `applyLiveInjuries` |
 | `/api/leagues/[id]/suspensions` | GET | Suspension / yellow-card info for squad |
 | `/api/leagues/[id]/mantra-positions` | GET | Official Mantra positions for the tournament |
 | `/api/leagues/[id]/mantra-import` | POST | Import mantrafootball team by id → matched `SquadPlayer[]` preview (not saved) + unmatched; needs `mantra_session` cookie; 409 if roster is from a past season |
