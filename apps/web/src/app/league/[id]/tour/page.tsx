@@ -13,7 +13,7 @@ import type { SquadPlayer } from '@/types/squad';
 import type { PlayerAnalytics } from '@/app/api/leagues/[id]/analytics/route';
 import type { PlayerRecentMatch } from '@/lib/fotmob';
 import { POSITION_ORDER, POSITION_SECTIONS, effectivePositionGroup } from '@/lib/positionGroups';
-import { MODULES, effectiveScore, enrichPlayers, assignModule, type EnrichedPlayer, type ModuleAssignment } from '@/lib/tourModules';
+import { MODULES, effectiveScore, enrichPlayers, pickBestModule, type EnrichedPlayer } from '@/lib/tourModules';
 import { isBlocked } from '@/lib/tourScoring';
 import { fetchJsonCached, CACHE_KEY } from '@/lib/clientCache';
 import { PitchView } from '@/components/tour/PitchView';
@@ -30,6 +30,8 @@ export default function TourPage() {
   const [mainIds, setMainIds] = useState<Set<number>>(new Set());
   const [selectedModule, setSelectedModule] = useState<string | null>(null);
   const [appliedModule, setAppliedModule] = useState<string | null>(null);
+  /** Team defence bonus (Mantra points, 0–5) of the last auto-select. */
+  const [appliedDefenceBonus, setAppliedDefenceBonus] = useState(0);
   /** Slot-ordered IDs from the last auto-select (index 0 = GK, 1-10 = outfield slots). */
   const [mainSlots, setMainSlots] = useState<number[]>([]);
   /** Score penalty per slot from the last auto-select (0 = native, -1.5 or -3 = out of position). */
@@ -127,37 +129,16 @@ export default function TourPage() {
   // ── Auto-select ───────────────────────────────────────────────────────────────
   function autoSelect() {
     const available = players.filter((p) => !isBlocked(p));
-    let best: ModuleAssignment | null = null;
-    let chosenModuleName: string | null = null;
-
-    if (selectedModule) {
-      const mod = MODULES.find((m) => m.name === selectedModule);
-      if (mod) { best = assignModule(available, mod.slots); chosenModuleName = mod.name; }
-    } else {
-      // Highest total effective score wins. effectiveScore already penalizes
-      // out-of-position slots by dropping their rating component (see its doc
-      // comment) — additionally requiring fewest-OOP-first double-counts that
-      // penalty and can pick a lower-scoring formation over a genuinely better one.
-      let bestScore = -Infinity;
-      for (const mod of MODULES) {
-        const assignment = assignModule(available, mod.slots);
-        if (!assignment) continue;
-        const score = assignment.ids.reduce((sum, id, i) => {
-          const p = available.find((pl) => pl.id === id);
-          const sb = p?.scoreBreakdown;
-          return sum + (sb ? effectiveScore(sb, assignment.penalty[i]) : 0);
-        }, 0);
-        if (score > bestScore) {
-          bestScore = score; best = assignment; chosenModuleName = mod.name;
-        }
-      }
-    }
-
+    // Pinned chip → that formation; otherwise the formation with the highest total effective score
+    // plus the team defence bonus (see pickBestModule in lib/tourModules.ts).
+    const best = pickBestModule(available, selectedModule);
     if (!best) return;
-    const { ids, penalty } = best;
+
+    const { ids, penalty } = best.assignment;
     startCalculation(() => {
       setMainIds(new Set<number>(ids));
-      setAppliedModule(chosenModuleName);
+      setAppliedModule(best.moduleName);
+      setAppliedDefenceBonus(best.defenceBonus);
       setMainSlots(ids);
       setMainSlotsPenalty(penalty);
       setViewMode('tactics');
@@ -275,6 +256,12 @@ export default function TourPage() {
             <div className="text-center">
               <p className="text-lg font-bold text-gray-300">{appliedModule}</p>
               <p className="text-[10px] text-gray-500">{selectedModule ? 'Formation' : 'Best formation'}</p>
+            </div>
+          )}
+          {appliedModule && mainSlots.length === 11 && (
+            <div className="text-center" title="Team bonus from the average base rating of the back line (0–5 points). Included when choosing the best formation.">
+              <p className="text-lg font-bold tabular-nums text-gray-300">+{appliedDefenceBonus}</p>
+              <p className="text-[10px] text-gray-500">Def. bonus</p>
             </div>
           )}
           {isValid && (

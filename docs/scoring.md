@@ -286,7 +286,13 @@ For each module, slots are filled with a **constrained-slot-first** greedy appro
 
 ### Step 2 — Pick the best module
 
-Unless the user pinned a formation chip, every module is assigned and the one with the **highest total `effectiveScore`** wins (sum over the GK and 10 slots; out-of-position players already lose rating points via the malus). Infeasible modules are skipped.
+Unless the user pinned a formation chip, every module is assigned and the one with the **highest `assignmentScore`** wins: the sum of `effectiveScore` over the GK and 10 slots (out-of-position players already lose rating points via the malus) **plus the team defence bonus**. Infeasible modules are skipped. Implemented by `pickBestModule()` in `lib/tourModules.ts`.
+
+#### Defence bonus
+
+Official rule (mantrafootball.org/rules): the team gets 0–5 points from the **average base score** of the module's defenders — <7.00 → 0, 7.00–7.24 → 1, 7.25–7.49 → 2, 7.50–7.74 → 3, 7.75–7.99 → 4, ≥8.00 → 5. The malus does not affect it, and the goalkeeper is excluded.
+
+In the app: base score = `scoreBreakdown.baseRating` (blended season/form rating, unpenalised); defenders = the module's back-line slots (slots accepting only RB/CB/LB — **3 in 3-x-x, 4 in 4-x-x; wing-backs not counted**, an assumption to verify against the rules page). The bonus is converted at `SCORE_UNITS_PER_MANTRA_POINT = 15` (the same rate as `(rating − 6) × 15`, i.e. 1 Mantra point ≈ 1 rating point), so a 5-point bonus is worth 75 score units when comparing formations. It only influences **which formation** is picked — it is not added to individual player scores, and with a pinned formation it has no effect. The tour header shows the result as "Def. bonus".
 
 Earlier versions ranked "fewest out-of-position slots" first; that double-counted the penalty and could pick a worse formation, so it was removed (see the comment in `autoSelect()`).
 

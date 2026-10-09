@@ -184,3 +184,83 @@ export function assignModule(available: EnrichedPlayer[], slots: MantraPosition[
     penalty: [0, ...(resultPenalty as number[])],
   };
 }
+
+// ─── Defence bonus & module choice ────────────────────────────────────────────
+
+/**
+ * One Mantra point ≈ one rating point, and calcScore turns one rating point into 15 score units
+ * (`(rating − 6) × 15`). The defence bonus (0–5 Mantra points) is converted at the same rate so
+ * it is comparable with the per-player scores it is added to.
+ */
+export const SCORE_UNITS_PER_MANTRA_POINT = 15;
+
+/**
+ * Team defence bonus from the average BASE score of the module's defenders (official rules,
+ * mantrafootball.org/rules): <7.00 → 0, 7.00–7.24 → 1, 7.25–7.49 → 2, … ≥8.00 → 5.
+ */
+export function defenceBonusPoints(avgBaseRating: number): number {
+  if (avgBaseRating < 7) return 0;
+  return Math.min(5, Math.floor((avgBaseRating - 7) / 0.25 + 1e-9) + 1);
+}
+
+const BACK_LINE: ReadonlySet<MantraPosition> = new Set<MantraPosition>(['RB', 'CB', 'LB']);
+
+/**
+ * Indexes (into `slots`, i.e. outfield slot order) of the module's defenders: slots that only
+ * accept RB/CB/LB. Wing-back (WB) slots are NOT counted — assumption: Mantra's "defensive
+ * positions in the module" means the back line (3 in 3-x-x, 4 in 4-x-x). Verify against the rules page.
+ */
+export function defenderSlotIndexes(slots: MantraPosition[][]): number[] {
+  return slots.flatMap((s, i) => (s.every((p) => BACK_LINE.has(p)) ? [i] : []));
+}
+
+/** Defence bonus (Mantra points) for an assignment: average unpenalised base rating of the defenders. */
+export function assignmentDefenceBonus(
+  assignment: ModuleAssignment,
+  byId: Map<number, EnrichedPlayer>,
+  slots: MantraPosition[][],
+): number {
+  const idx = defenderSlotIndexes(slots);
+  if (idx.length === 0) return 0;
+  // ids[0] is the GK, outfield slot i is ids[i + 1]. The malus does not affect the defence bonus.
+  const ratings = idx.map((i) => byId.get(assignment.ids[i + 1])?.scoreBreakdown.baseRating ?? 6);
+  return defenceBonusPoints(ratings.reduce((a, b) => a + b, 0) / ratings.length);
+}
+
+/** Total effective score of an assignment (GK + 10 slots, malus applied) plus the defence bonus. */
+export function assignmentScore(
+  assignment: ModuleAssignment,
+  byId: Map<number, EnrichedPlayer>,
+  slots: MantraPosition[][],
+): number {
+  const players = assignment.ids.reduce((sum, id, i) => {
+    const sb = byId.get(id)?.scoreBreakdown;
+    return sum + (sb ? effectiveScore(sb, assignment.penalty[i]) : 0);
+  }, 0);
+  return players + assignmentDefenceBonus(assignment, byId, slots) * SCORE_UNITS_PER_MANTRA_POINT;
+}
+
+/**
+ * Picks the formation for auto-select. A pinned module name is used as-is (null if infeasible);
+ * otherwise every module is assigned and the highest `assignmentScore` wins.
+ */
+export function pickBestModule(
+  available: EnrichedPlayer[],
+  pinnedName: string | null = null,
+): { moduleName: string; assignment: ModuleAssignment; defenceBonus: number } | null {
+  const byId = new Map(available.map((p) => [p.id, p]));
+  const candidates = pinnedName ? MODULES.filter((m) => m.name === pinnedName) : MODULES;
+
+  let best: { moduleName: string; assignment: ModuleAssignment; defenceBonus: number } | null = null;
+  let bestScore = -Infinity;
+  for (const mod of candidates) {
+    const assignment = assignModule(available, mod.slots);
+    if (!assignment) continue;
+    const score = assignmentScore(assignment, byId, mod.slots);
+    if (score > bestScore) {
+      bestScore = score;
+      best = { moduleName: mod.name, assignment, defenceBonus: assignmentDefenceBonus(assignment, byId, mod.slots) };
+    }
+  }
+  return best;
+}
