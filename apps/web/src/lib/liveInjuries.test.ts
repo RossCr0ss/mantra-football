@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyLiveInjuries } from './liveInjuries';
 import { isInjuryActive } from './injuryDate';
-import { calcScore, computeTeamForm } from './tourScoring';
+import { calcScore } from './tourScoring';
 import { makePlayer } from './testUtils';
 import type { PlayerInjuryInfo } from '@/lib/fotmob';
 
@@ -46,6 +46,6 @@ describe('applyLiveInjuries', () => {
 
   it('a live-injured player is excluded from scoring (−999) like a manual injury', () => {
     const [p] = applyLiveInjuries([makePlayer({ id: 1 })], { 1: info() }, NOW);
-    expect(calcScore(p, null, null, null, [], computeTeamForm([])).total).toBe(-999);
+    expect(calcScore(p, null, null, null, []).total).toBe(-999);
   });
 });

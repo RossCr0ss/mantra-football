@@ -43,7 +43,7 @@ In `apps/web/src/app/league/[id]/analytics/page.tsx`:
 
 ### Step 4 — Use in tour scoring (optional)
 
-If the stat should influence auto-select, update `calcScore()` in `apps/web/src/lib/tourScoring.ts` (and extend `tourScoring.test.ts`).
+If the stat should influence auto-select, do **not** just add a hand-picked weight: first check that the stat is extracted correctly and present for most players (`docs/scoring.md`, "Analytics data source" caveat), then add it to the fit in `scripts/weights-research` and see whether it improves the held-out result (`docs/scoring-research.md`); then update `calcScore()` / `SCORE_WEIGHTS` in `apps/web/src/lib/tourScoring.ts` and the tests.
 
 ---
 
@@ -107,11 +107,11 @@ When building any UI that lists players, follow these conventions:
 
 The entire scoring logic is in `calcScore()` in `apps/web/src/lib/tourScoring.ts`.
 
-- `ScoreBreakdown` interface defines what's tracked per component
+- `SCORE_WEIGHTS` holds the fitted weights, `ScoreBreakdown` the per-term display values
 - `scoreTier()` controls the display colour thresholds
 - `autoSelect()` / `assignModule()` are the selection logic — they use `.scoreBreakdown.total` only; component breakdown is display-only
 
-See `docs/scoring.md` for a full explanation of each component and tuning guidance.
+See `docs/scoring.md` for the formula and `docs/scoring-research.md` for how the weights were fitted and how to re-fit them.
 
 ---
 

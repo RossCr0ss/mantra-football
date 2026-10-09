@@ -1,4 +1,4 @@
-import type { SquadPlayer, MantraPosition } from '@/types/squad';
+import type { SquadPlayer, MantraPosition, PositionGroup } from '@/types/squad';
 import type { TeamFixture, FixtureOdds, PlayerRecentMatch } from '@/lib/fotmob';
 import type { PlayerAnalytics } from '@/app/api/leagues/[id]/analytics/route';
 import { effectivePositionGroup } from '@/lib/positionGroups';
@@ -24,18 +24,74 @@ export function csBonus(mantraPositions: MantraPosition[]): number {
   return 0;
 }
 
-export interface ScoreBreakdown {
-  total: number;
-  /** Raw analytics rating (e.g. 7.2) — stored so malus can be applied additively later */
-  baseRating: number;
-  /** ratingScore = max(0, (baseRating - 6.0) * 15) */
+/** One Mantra point (≈ one FotMob rating point) is worth this many score units. */
+export const SCORE_UNITS_PER_MANTRA_POINT = 15;
+
+/** Per-position-group weights of the expected-points model (see docs/scoring.md). */
+export interface GroupWeights {
+  /** Expected Mantra points of a typical starter before any other term. */
+  intercept: number;
+  /** × blended season/form rating. */
   rating: number;
-  fixture: number;
-  odds: number;
-  position: number;
-  minutes: number;
-  /** Team form momentum: +4 for winning streak, −4 for losing streak (last 5 matches) */
-  form: number;
+  /** × team win probability (1 / decimal odds). */
+  winProb: number;
+  /** × opponent win probability — negative: a strong opponent costs points. */
+  oppWinProb: number;
+  /** × draw probability (draws mean clean sheets for defenders, fewer goals for attackers). */
+  drawProb: number;
+  /** × xG per match × goal bonus (xG falls back to goals per match). */
+  xgGoalBonus: number;
+  /** × assists per match. */
+  assist: number;
+  /** × chances created (key passes) per match. */
+  chanceCreated: number;
+  /** × big chances created per match. */
+  bigChance: number;
+  /** × clean-sheet bonus × win probability / opponent win probability (defenders). */
+  csWin: number;
+  csOppWin: number;
+}
+
+export const SCORE_WEIGHTS: {
+  /** Points a replacement (bench) player is assumed to earn — the zero point of the score. */
+  replacement: number;
+  /** logistic start probability: intercept + share × minutes share + avgMinutes × (avg minutes / 90). */
+  startProb: { intercept: number; share: number; avgMinutes: number; unknown: number; suggestedBlend: number };
+  byGroup: Record<PositionGroup, GroupWeights>;
+} = {
+  replacement: 5.0,
+  startProb: { intercept: -2.46, share: 3.67, avgMinutes: 0.89, unknown: 0.5, suggestedBlend: 0.4 },
+  byGroup: {
+    GK:  { intercept: 6.465, rating: 0.03, winProb: 1.03, oppWinProb: -1.33, drawProb: 1.906, xgGoalBonus: 0, assist: 0, chanceCreated: 0, bigChance: 0, csWin: 0, csOppWin: 0 },
+    DEF: { intercept: 6.735, rating: 0.058, winProb: 0.518, oppWinProb: -0.578, drawProb: 0.6, xgGoalBonus: 0.42, assist: 0, chanceCreated: 0.168, bigChance: 0.166, csWin: 0.482, csOppWin: -0.475 },
+    MID: { intercept: 6.202, rating: 0.144, winProb: 0.995, oppWinProb: -0.796, drawProb: -0.726, xgGoalBonus: 0.549, assist: 0.095, chanceCreated: 0.16, bigChance: 0.181, csWin: 0, csOppWin: 0 },
+    FWD: { intercept: 6.275, rating: 0.169, winProb: 1.149, oppWinProb: -0.901, drawProb: -1.115, xgGoalBonus: 0.39, assist: 0, chanceCreated: 0.126, bigChance: 0.201, csWin: 0, csOppWin: 0 },
+  },
+};
+
+/** Empirical averages of the 1X2 probabilities by fixture difficulty — used when odds are unavailable. */
+const WIN_PROB_BY_DIFFICULTY: Record<number, number> = { 1: 0.244, 2: 0.348, 3: 0.411, 4: 0.448, 5: 0.503 };
+const OPP_WIN_PROB_BY_DIFFICULTY: Record<number, number> = { 1: 0.587, 2: 0.455, 3: 0.381, 4: 0.342, 5: 0.296 };
+const DEFAULT_DRAW_PROB = 0.28;
+/** Games in a typical league season — scales last season's minutes into a minutes share. */
+const PRIOR_SEASON_GAMES = 34;
+
+export interface ScoreBreakdown {
+  /** Score units: SCORE_UNITS_PER_MANTRA_POINT × startProb × (expectedPoints − replacement). −999 = blocked. */
+  total: number;
+  /** Blended season/form rating (unpenalised) — input of the team defence bonus. */
+  baseRating: number;
+  /** Expected Mantra points if the player starts. */
+  expectedPoints: number;
+  /** Probability of starting (0–1): availabilityPct when set, else estimated from minutes played. */
+  startProb: number;
+  /** Score units (already × startProb) contributed by the player's own quality (rating above 6). */
+  rating: number;
+  /** … by the match context: own/opponent win probability, draw probability, clean-sheet odds. */
+  context: number;
+  /** … by attacking output: xG × goal bonus, assists, chances created, big chances created. */
+  attack: number;
+  /** availabilityPct as used (0–100). */
   availability: number;
 }
 
@@ -49,22 +105,25 @@ export function recentFormRating(form: PlayerRecentMatch[]): number | null {
   return rated.reduce((s, r) => s + r, 0) / rated.length;
 }
 
-export interface TeamForm {
-  wins: number;
-  draws: number;
-  losses: number;
-  csRate: number;
-  matches: number;
+/** 1 / decimal odds when they are a usable price (> 1), else null. */
+function impliedProb(odds: number | null | undefined): number | null {
+  return odds != null && odds > 1 ? 1 / odds : null;
 }
 
-export function computeTeamForm(form: PlayerRecentMatch[]): TeamForm {
-  const recent = form.filter((m) => m.result !== null).slice(0, 5);
-  if (recent.length === 0) return { wins: 0, draws: 0, losses: 0, csRate: 0, matches: 0 };
-  const wins   = recent.filter((m) => m.result === 'W').length;
-  const draws  = recent.filter((m) => m.result === 'D').length;
-  const losses = recent.filter((m) => m.result === 'L').length;
-  const cs     = recent.filter((m) => (m.goalsAgainst ?? 1) === 0).length;
-  return { wins, draws, losses, csRate: cs / recent.length, matches: recent.length };
+/**
+ * Own win / opponent win / draw probability of the fixture from the 1X2 odds. Any missing price falls
+ * back to the empirical average for the fixture difficulty (3 when the difficulty is unknown too).
+ */
+export function matchContext(fix: TeamFixture | null, odds: FixtureOdds | null) {
+  const diff = Math.min(5, Math.max(1, Math.round(fix?.difficulty ?? 3)));
+  const own = odds && fix ? impliedProb(fix.isHome ? odds.home : odds.away) : null;
+  const opp = odds && fix ? impliedProb(fix.isHome ? odds.away : odds.home) : null;
+  const draw = odds && fix ? impliedProb(odds.draw) : null;
+  return {
+    winProb: own ?? WIN_PROB_BY_DIFFICULTY[diff],
+    oppWinProb: opp ?? OPP_WIN_PROB_BY_DIFFICULTY[diff],
+    drawProb: draw ?? DEFAULT_DRAW_PROB,
+  };
 }
 
 export function calcScore(
@@ -73,19 +132,17 @@ export function calcScore(
   fix: TeamFixture | null,
   odds: FixtureOdds | null,
   form: PlayerRecentMatch[],
-  teamForm: TeamForm,
 ): ScoreBreakdown {
   if (isBlocked(player)) {
-    return { total: -999, baseRating: 6.0, rating: 0, fixture: 0, odds: 0, position: 0, minutes: 0, form: 0, availability: 0 };
+    return { total: -999, baseRating: 6.0, expectedPoints: 0, startProb: 0, rating: 0, context: 0, attack: 0, availability: 0 };
   }
 
   const matchesPlayed = analytics?.matchesPlayed ?? 0;
   const prior = analytics?.priorSeason ?? null;
   const priorMatches = prior?.matchesPlayed ?? 0;
   // Confidence in current-season data ramps from 0 to full trust over its first
-  // 4 matches (matches the old "matchesPlayed > 3" cutoff), instead of a hard
-  // switch — early in a new season every player's current-season stats are
-  // 0/null, which used to make every player score identically until match 4.
+  // 4 matches, instead of a hard switch — early in a new season every player's
+  // current-season stats are 0/null, which would make every player score identically.
   const wConf = Math.min(1, matchesPlayed / 4);
 
   // Blends a counting stat's per-match rate between current season (weighted by
@@ -112,158 +169,83 @@ export function calcScore(
   const formRating = recentFormRating(form);
   // Blend: 60% season average + 40% recent form when enough form matches available
   const rating = formRating !== null ? seasonRating * 0.6 + formRating * 0.4 : seasonRating;
-  const ratingScore = Math.max(0, (rating - 6.0) * 15);
-
-  const diff = fix?.difficulty ?? 3;
-  const fixtureScore = (diff - 1) * 4;
-
-  let oddsScore = 0;
-  let winProb = 0;
-  if (odds && fix) {
-    const teamOdds = fix.isHome ? odds.home : odds.away;
-    if (teamOdds && teamOdds > 1) {
-      winProb = 1 / teamOdds;
-      oddsScore = winProb * 15;
-    }
-  } else {
-    winProb = diff * 0.1 - 0.05;
-  }
 
   const group = analytics?.positionGroup ?? effectivePositionGroup(player);
   const positions = player.mantraPositions ?? [];
+  const w = SCORE_WEIGHTS.byGroup[group as PositionGroup] ?? SCORE_WEIGHTS.byGroup.MID;
+  const ctx = matchContext(fix, odds);
 
   const gpg = pm(analytics?.goals, prior?.goals);
-  const apg = pm(analytics?.assists, prior?.assists);
+  const xgPerMatch = pmOr(analytics?.expectedGoals, prior?.expectedGoals, gpg);
+  const csb = csBonus(positions);
 
-  // Blend odds-based CS probability with actual team CS rate from recent form
-  const baseCsProb = diff * 0.075 - 0.025;
-  const csFromOdds = winProb > 0 ? Math.min(0.55, baseCsProb + winProb * 0.15) : baseCsProb;
-  const csProb = teamForm.matches >= 3
-    ? csFromOdds * 0.5 + teamForm.csRate * 0.5
-    : csFromOdds;
+  const quality = w.rating * (rating - 6.0);
+  const context = w.winProb * ctx.winProb + w.oppWinProb * ctx.oppWinProb + w.drawProb * ctx.drawProb
+    + csb * (w.csWin * ctx.winProb + w.csOppWin * ctx.oppWinProb);
+  const attack = w.xgGoalBonus * xgPerMatch * goalBonus(positions)
+    + w.assist * pm(analytics?.assists, prior?.assists)
+    + w.chanceCreated * pm(analytics?.chancesCreated, prior?.chancesCreated)
+    + w.bigChance * pm(analytics?.bigChancesCreated, prior?.bigChancesCreated);
+  const expectedPoints = w.intercept + w.rating * 6.0 + quality + context + attack;
 
-  let positionScore = 0;
-  if (group === 'GK') {
-    const hasCsData = (matchesPlayed > 0 && analytics?.cleanSheets != null)
-      || (priorMatches > 0 && prior?.cleanSheets != null);
-    const actualCsRate = hasCsData ? pm(analytics?.cleanSheets, prior?.cleanSheets) : null;
-    const effectiveCsProb = actualCsRate !== null
-      ? csProb * 0.4 + actualCsRate * 0.6 : csProb;
-    const curSvPct = analytics?.savePercentage ?? null;
-    const priorSvPct = prior?.savePercentage ?? null;
-    const svPct = curSvPct != null && priorSvPct != null
-      ? curSvPct * wConf + priorSvPct * (1 - wConf)
-      : curSvPct ?? priorSvPct ?? null;
-    // Save % above 65 → each extra % is worth 0.1 pts (75% → +1.0, 80% → +1.5)
-    const svPctBonus = svPct != null ? Math.max(0, svPct - 65) * 0.1 : 0;
-    positionScore = effectiveCsProb * csBonus(positions) * 12
-      + pm(analytics?.saves, prior?.saves) * 0.4
-      + svPctBonus
-      + pm(analytics?.goalsPrevented, prior?.goalsPrevented) * 5
-      + pm(analytics?.highClaims, prior?.highClaims) * 0.4
-      - pm(analytics?.goalsConceded, prior?.goalsConceded) * 0.2;
-  } else if (group === 'DEF') {
-    // Defensive actions per match — weighted by how directly they prevent scoring
-    const defContrib = pm(analytics?.tackles, prior?.tackles)                             * 0.8
-                     + pm(analytics?.interceptions, prior?.interceptions)                 * 1.0
-                     + pm(analytics?.clearances, prior?.clearances)                        * 0.4
-                     + pm(analytics?.blockedShots, prior?.blockedShots)                    * 0.8
-                     + pm(analytics?.possessionWonFinal3rd, prior?.possessionWonFinal3rd)  * 0.5
-                     + pm(analytics?.aerialsWon, prior?.aerialsWon)                        * 0.4
-                     - pm(analytics?.dribbledPast, prior?.dribbledPast)                    * 0.5
-                     - pm(analytics?.foulsCommitted, prior?.foulsCommitted)                * 0.25;
-    positionScore = csProb * csBonus(positions) * 10
-      + gpg * goalBonus(positions) * 6
-      + apg * 4
-      + defContrib;
-  } else if (group === 'MID') {
-    const xgPerMatch = pmOr(analytics?.expectedGoals, prior?.expectedGoals, gpg);
-    const kpPerMatch = pmOr(analytics?.chancesCreated, prior?.chancesCreated, apg);
-    // Split by sub-role: DM values defensive work more; AM/W values creativity more; CM is balanced
-    const isDM    = positions.includes('DM') && !positions.includes('AM') && !positions.includes('W');
-    const isAMorW = positions.includes('AM') || positions.includes('W');
-    if (isDM) {
-      positionScore = xgPerMatch * goalBonus(positions) * 5
-        + kpPerMatch * 3
-        + pm(analytics?.shots, prior?.shots) * 0.1
-        + pm(analytics?.bigChancesCreated, prior?.bigChancesCreated) * 2
-        + pm(analytics?.successfulDribbles, prior?.successfulDribbles) * 0.2
-        + pm(analytics?.tackles, prior?.tackles) * 0.8
-        + pm(analytics?.interceptions, prior?.interceptions) * 1.2
-        + pm(analytics?.clearances, prior?.clearances) * 0.3;
-    } else if (isAMorW) {
-      positionScore = xgPerMatch * goalBonus(positions) * 9
-        + kpPerMatch * 7
-        + pm(analytics?.shots, prior?.shots) * 0.2
-        + pm(analytics?.bigChancesCreated, prior?.bigChancesCreated) * 5
-        + pm(analytics?.successfulDribbles, prior?.successfulDribbles) * 0.5
-        + pm(analytics?.tackles, prior?.tackles) * 0.15
-        + pm(analytics?.interceptions, prior?.interceptions) * 0.2;
-    } else {
-      // CM — balanced
-      positionScore = xgPerMatch * goalBonus(positions) * 7
-        + kpPerMatch * 5
-        + pm(analytics?.shots, prior?.shots) * 0.15
-        + pm(analytics?.bigChancesCreated, prior?.bigChancesCreated) * 4
-        + pm(analytics?.successfulDribbles, prior?.successfulDribbles) * 0.3
-        + pm(analytics?.tackles, prior?.tackles) * 0.4
-        + pm(analytics?.interceptions, prior?.interceptions) * 0.6;
-    }
-  } else {
-    // FWD — split W (creative wide) vs ST/FW (goal threat)
-    const xgPerMatch = pmOr(analytics?.expectedGoals, prior?.expectedGoals, gpg);
-    const isW = positions.includes('W') && !positions.includes('ST') && !positions.includes('FW');
-    if (isW) {
-      positionScore = xgPerMatch * goalBonus(positions) * 8
-        + pm(analytics?.chancesCreated, prior?.chancesCreated) * 3
-        + apg * 6
-        + pm(analytics?.shots, prior?.shots) * 0.2
-        + pm(analytics?.bigChancesCreated, prior?.bigChancesCreated) * 3
-        + pm(analytics?.successfulDribbles, prior?.successfulDribbles) * 0.6
-        - pm(analytics?.bigChancesMissed, prior?.bigChancesMissed) * 1.5;
-    } else {
-      positionScore = xgPerMatch * goalBonus(positions) * 10
-        + apg * 5
-        + pm(analytics?.shots, prior?.shots) * 0.25
-        + pm(analytics?.bigChancesCreated, prior?.bigChancesCreated) * 2
-        + pm(analytics?.successfulDribbles, prior?.successfulDribbles) * 0.4
-        + pm(analytics?.aerialsWon, prior?.aerialsWon) * 0.3
-        - pm(analytics?.bigChancesMissed, prior?.bigChancesMissed) * 2.0;
-    }
+  let startProb = 0;
+  if (fix) {
+    const modelProb = estimateStartProb(analytics, fix);
+    const pct = player.availabilityPct;
+    // A hand-set availability is taken as is; an algorithm-suggested one (last-5-matches form) is
+    // blended with the season-long minutes model, which is an independent signal of the same thing.
+    const b = SCORE_WEIGHTS.startProb.suggestedBlend;
+    startProb = pct == null ? modelProb
+      : player.availabilityPctSource === 'suggested' ? (1 - b) * (pct / 100) + b * modelProb
+      : pct / 100;
   }
 
-  const curAvgMin = matchesPlayed > 0 && analytics?.minutesPlayed
-    ? analytics.minutesPlayed / matchesPlayed : null;
-  const priorAvgMin = priorMatches > 0 && prior?.minutesPlayed
-    ? prior.minutesPlayed / priorMatches : null;
-  const avgMin = curAvgMin != null && priorAvgMin != null
-    ? curAvgMin * wConf + priorAvgMin * (1 - wConf)
-    : curAvgMin ?? priorAvgMin ?? null;
-  // Linear scale: 90 min avg → 12 pts, capped at 10
-  const minutesScore = avgMin !== null ? Math.round(Math.min(10, (avgMin / 90) * 12)) : 0;
-
-  // Team form momentum: (wins − losses) / matches × 4, range ≈ ±4
-  const formBonus = teamForm.matches >= 3
-    ? ((teamForm.wins - teamForm.losses) / teamForm.matches) * 4
-    : 0;
-
-  const noFixturePenalty = fix ? 0 : 25;
-
-  const availPct = player.availabilityPct ?? 100;
-  const baseTotal = ratingScore + fixtureScore + oddsScore + positionScore + minutesScore + formBonus - noFixturePenalty;
-  const total = Math.max(0, baseTotal) * (availPct / 100);
+  const k = SCORE_UNITS_PER_MANTRA_POINT * startProb;
+  const total = Math.max(0, k * (expectedPoints - SCORE_WEIGHTS.replacement));
 
   return {
     total,
     baseRating: rating,
-    rating: ratingScore,
-    fixture: fixtureScore,
-    odds: oddsScore,
-    position: positionScore,
-    minutes: minutesScore,
-    form: formBonus,
-    availability: availPct,
+    expectedPoints,
+    startProb,
+    rating: k * quality,
+    context: k * context,
+    attack: k * attack,
+    availability: startProb * 100,
   };
+}
+
+/**
+ * Probability that the player starts the next match, from how much of his team's minutes he has played:
+ * this season's share of (team matches so far × 90), blended with last season's share while the season
+ * is young, plus his average minutes per appearance. No minutes data at all (e.g. Ukrainian league) → neutral.
+ */
+export function estimateStartProb(analytics: PlayerAnalytics | null, fix: TeamFixture | null): number {
+  const cfg = SCORE_WEIGHTS.startProb;
+  const prior = analytics?.priorSeason ?? null;
+  const mp = analytics?.matchesPlayed ?? 0;
+  const priorMp = prior?.matchesPlayed ?? 0;
+  const minutes = analytics?.minutesPlayed ?? 0;
+  const priorMinutes = prior?.minutesPlayed ?? 0;
+  if (mp === 0 && priorMp === 0 && minutes === 0 && priorMinutes === 0) return cfg.unknown;
+
+  // Matches the team has played so far ≈ round − 1; never fewer than his own appearances (rounds restart in playoffs).
+  const round = fix?.round != null ? Number(fix.round) : NaN;
+  const teamMatches = Math.max(mp, Number.isFinite(round) ? round - 1 : 0);
+  const shareCur = teamMatches > 0 ? Math.min(1, minutes / (teamMatches * 90)) : null;
+  const sharePrior = priorMinutes > 0 ? Math.min(1, priorMinutes / (PRIOR_SEASON_GAMES * 90)) : null;
+  const wCur = Math.min(1, teamMatches / 6);
+  const share = shareCur == null ? sharePrior ?? 0
+    : sharePrior == null ? shareCur
+    : shareCur * wCur + sharePrior * (1 - wCur);
+
+  const wConf = Math.min(1, mp / 4);
+  const curAvg = mp > 0 && minutes > 0 ? minutes / mp : null;
+  const priorAvg = priorMp > 0 && priorMinutes > 0 ? priorMinutes / priorMp : null;
+  const avgMin = curAvg != null && priorAvg != null ? curAvg * wConf + priorAvg * (1 - wConf) : curAvg ?? priorAvg ?? 0;
+
+  const z = cfg.intercept + cfg.share * share + cfg.avgMinutes * (avgMin / 90);
+  return 1 / (1 + Math.exp(-z));
 }
 
 export function isBlocked(player: SquadPlayer): boolean {

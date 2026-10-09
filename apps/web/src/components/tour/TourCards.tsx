@@ -171,7 +171,7 @@ export function SquadRow({
       {/* Score + breakdown */}
       <div
         className="ml-auto shrink-0 flex flex-col items-end gap-0.5"
-        title={blocked ? '' : `Rating ${sb.rating.toFixed(1)} · Fixture ${sb.fixture.toFixed(1)} · Position ${sb.position.toFixed(1)} · Minutes ${sb.minutes.toFixed(1)} · Form ${sb.form.toFixed(1)}`}
+        title={blocked ? '' : `Expected ${sb.expectedPoints.toFixed(1)} pts if he starts · Start ${Math.round(sb.availability)}% · Quality ${sb.rating.toFixed(1)} · Context ${sb.context.toFixed(1)} · Attack ${sb.attack.toFixed(1)}`}
       >
         <span className={`rounded px-2 py-1 text-xs font-bold tabular-nums ring-1 ${tier.bg} ${tier.text} ${tier.ring}`}>
           {blocked ? '—' : sb.total.toFixed(1)}
@@ -179,11 +179,9 @@ export function SquadRow({
         {!blocked && sb.total > 0 && (
           <div className="flex h-1 w-12 overflow-hidden rounded-full gap-px">
             {[
-              { v: sb.rating,   cls: 'bg-yellow-400' },
-              { v: sb.fixture,  cls: 'bg-blue-400'   },
-              { v: sb.position, cls: 'bg-emerald-400' },
-              { v: sb.minutes,  cls: 'bg-purple-400'  },
-              { v: sb.form,     cls: 'bg-teal-400'    },
+              { v: sb.rating,  cls: 'bg-yellow-400'  },
+              { v: sb.context, cls: 'bg-blue-400'    },
+              { v: sb.attack,  cls: 'bg-emerald-400' },
             ].map(({ v, cls }) => (
               v > 0 ? <div key={cls} className={cls} style={{ flex: v }} /> : null
             ))}

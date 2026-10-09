@@ -7,8 +7,8 @@ import { makePlayer } from './testUtils';
 import type { MantraPosition } from '@/types/squad';
 import type { ScoreBreakdown } from './tourScoring';
 
-const bd = (total: number): ScoreBreakdown => ({
-  total, baseRating: 7, rating: 10, fixture: 0, odds: 0, position: 0, minutes: 0, form: 0, availability: 100,
+const bd = (total: number, startProb = 1): ScoreBreakdown => ({
+  total, baseRating: 7, expectedPoints: 7.5, startProb, rating: 10, context: 0, attack: 0, availability: startProb * 100,
 });
 
 function enriched(id: number, pos: MantraPosition, group: 'GK' | 'DEF' | 'MID' | 'FWD', total: number): EnrichedPlayer {
@@ -63,8 +63,15 @@ describe('effectiveScore', () => {
   it('does not change the score for pen = 0', () => {
     expect(effectiveScore(bd(42), 0)).toBe(42);
   });
-  it('never raises the score for out-of-position penalties', () => {
-    expect(effectiveScore(bd(42), -3)).toBeLessThanOrEqual(42);
+  it('subtracts the malus linearly: pen × SCORE_UNITS_PER_MANTRA_POINT', () => {
+    expect(effectiveScore(bd(42), -1.5)).toBeCloseTo(42 - 1.5 * SCORE_UNITS_PER_MANTRA_POINT);
+    expect(effectiveScore(bd(60), -3)).toBeCloseTo(60 - 3 * SCORE_UNITS_PER_MANTRA_POINT);
+  });
+  it('only costs points when the player actually starts (× start probability)', () => {
+    expect(effectiveScore(bd(42, 0.5), -1.5)).toBeCloseTo(42 - 1.5 * SCORE_UNITS_PER_MANTRA_POINT * 0.5);
+  });
+  it('is floored at 0', () => {
+    expect(effectiveScore(bd(10), -3)).toBe(0);
   });
 });
 

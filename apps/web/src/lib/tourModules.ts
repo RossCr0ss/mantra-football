@@ -2,7 +2,7 @@ import type { SquadPlayer, MantraPosition } from '@/types/squad';
 import type { TeamFixture, FixtureOdds, PlayerRecentMatch } from '@/lib/fotmob';
 import type { PlayerAnalytics } from '@/app/api/leagues/[id]/analytics/route';
 import { effectivePositionGroup } from '@/lib/positionGroups';
-import { calcScore, computeTeamForm, type ScoreBreakdown, type TeamForm } from '@/lib/tourScoring';
+import { calcScore, SCORE_UNITS_PER_MANTRA_POINT, type ScoreBreakdown } from '@/lib/tourScoring';
 
 // ─── Modules ──────────────────────────────────────────────────────────────────
 
@@ -60,21 +60,16 @@ export function getSlotPenalty(slotPositions: MantraPosition[], playerPositions:
 }
 
 /**
- * Applies the position penalty only to the rating component, matching the real
- * game: penalizedRating = baseRating + pen, then ratingScore is recomputed.
- * All other components (fixture, odds, position stats, minutes) are unchanged.
+ * Applies the position malus: in the real game it is subtracted from the player's match score, so an
+ * out-of-position player is worth `pen` Mantra points less (only when he plays → × start probability).
+ * Floored at 0 like every score.
  *
  *   pen  0   → no change
- *   pen -1.5 → e.g. 7.5 → 6.0 → ratingScore drops to 0
- *   pen -3   → e.g. 7.0 → 4.0 → ratingScore drops to 0
+ *   pen -1.5 → total − 1.5 × SCORE_UNITS_PER_MANTRA_POINT × startProb
  */
 export function effectiveScore(breakdown: ScoreBreakdown, pen: number): number {
   if (pen === 0) return breakdown.total;
-  const penalizedRating = breakdown.baseRating + pen;
-  const penalizedRatingScore = Math.max(0, (penalizedRating - 6.0) * 15);
-  const avail = breakdown.availability / 100;
-  const ratingDelta = (penalizedRatingScore - breakdown.rating) * avail;
-  return Math.max(0, breakdown.total + ratingDelta);
+  return Math.max(0, breakdown.total + pen * SCORE_UNITS_PER_MANTRA_POINT * breakdown.startProb);
 }
 
 // ─── Enriched player ──────────────────────────────────────────────────────────
@@ -93,21 +88,12 @@ export function enrichPlayers(
   oddsMap: Map<string, FixtureOdds | null>,
   formMap: Map<number, PlayerRecentMatch[]>,
 ): EnrichedPlayer[] {
-  // Aggregate team form from the first available player per team (all share the same match results)
-  const teamFormCache = new Map<number, TeamForm>();
-  for (const p of squad) {
-    if (!teamFormCache.has(p.teamId)) {
-      teamFormCache.set(p.teamId, computeTeamForm(formMap.get(p.id) ?? []));
-    }
-  }
-
   return squad.map((p) => {
     const fix = fixtures[p.teamId]?.[0] ?? null;
     const analytics = analyticsMap.get(p.id) ?? null;
     const odds = fix ? (oddsMap.get(fix.matchId) ?? null) : null;
     const form = formMap.get(p.id) ?? [];
-    const teamForm = teamFormCache.get(p.teamId) ?? { wins: 0, draws: 0, losses: 0, csRate: 0, matches: 0 };
-    return { ...p, nextFixture: fix, analytics, odds, scoreBreakdown: calcScore(p, analytics, fix, odds, form, teamForm) };
+    return { ...p, nextFixture: fix, analytics, odds, scoreBreakdown: calcScore(p, analytics, fix, odds, form) };
   });
 }
 
@@ -187,12 +173,8 @@ export function assignModule(available: EnrichedPlayer[], slots: MantraPosition[
 
 // ─── Defence bonus & module choice ────────────────────────────────────────────
 
-/**
- * One Mantra point ≈ one rating point, and calcScore turns one rating point into 15 score units
- * (`(rating − 6) × 15`). The defence bonus (0–5 Mantra points) is converted at the same rate so
- * it is comparable with the per-player scores it is added to.
- */
-export const SCORE_UNITS_PER_MANTRA_POINT = 15;
+/** The defence bonus (0–5 Mantra points) is converted at the same rate as player scores (`SCORE_UNITS_PER_MANTRA_POINT`, defined in tourScoring.ts). */
+export { SCORE_UNITS_PER_MANTRA_POINT };
 
 /**
  * Team defence bonus from the average BASE score of the module's defenders (official rules,

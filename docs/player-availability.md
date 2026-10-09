@@ -8,7 +8,7 @@ Players have two orthogonal availability fields that control their tour selectio
 
 ```typescript
 lineupStatus?: 'injured' | 'suspended'   // hard block
-availabilityPct?: number                 // 0–100, default 100
+availabilityPct?: number                 // 0–100; unset = the score estimates it from minutes played
 ```
 
 ### `lineupStatus`
@@ -31,14 +31,17 @@ Players with `lineupStatus` set can still be **manually** added to the main XI b
 
 ### `availabilityPct`
 
-A soft signal. Set when a player **may** play but with reduced expected minutes.
+A soft signal: the probability that the player starts. It is the start probability of the tour score (`docs/scoring.md`: `total = 15 × startProb × (expectedPoints − 5)`), so the score scales linearly with it.
 
 | Value | Meaning | Tour effect |
 |---|---|---|
-| 100 (default) | Confirmed starter | Score × 1.0 |
+| unset | Not touched | `startProb` is estimated from the share of his team's minutes he has played (AUC 0.81) |
+| 100 | Confirmed starter | Score × 1.0 |
 | 75 | Likely starter | Score × 0.75 |
 | 50 | Bench / uncertain | Score × 0.50 |
 | 0 | Not expected to play | Score × 0 (ranks at bottom, auto-select skips) |
+
+A hand-set value (`availabilityPctSource` `manual`, or unknown) is used as is. A value suggested from recent form (`'suggested'`, see `availabilitySuggestion.ts`) is blended 60/40 with the minutes-based estimate. In the backtest (`docs/scoring-research.md`) having an availability for every player is worth more than any weight: ~3.7 points per tour.
 
 A 0% player is NOT blocked — they can still be manually selected. They just have a score of 0.
 

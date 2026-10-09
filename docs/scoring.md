@@ -1,8 +1,14 @@
 # Tour Player Scoring Algorithm
 
-The scoring algorithm is `calcScore()` in `apps/web/src/lib/tourScoring.ts`; formations, out-of-position malus and slot assignment are in `apps/web/src/lib/tourModules.ts`; `page.tsx` under `app/league/[id]/tour/` only loads data and renders. Behaviour is pinned by `tourScoring.test.ts` / `tourModules.test.ts`.
+The scoring algorithm is `calcScore()` in `apps/web/src/lib/tourScoring.ts`; formations, out-of-position malus and slot assignment are in `apps/web/src/lib/tourModules.ts`; `page.tsx` under `app/league/[id]/tour/` only loads data and renders. Behaviour is pinned by `tourScoring.test.ts` / `tourScoring.weights.test.ts` / `tourModules.test.ts`.
 
-It ranks each squad player so the auto-select can pick the best XI for a matchday tour.
+It ranks each squad player so the auto-select can pick the best XI for a matchday tour. The weights were fitted on ~3,100 historical matches (see **`docs/scoring-research.md`** for data, method and the backtest; `scripts/weights-research/` re-fits them).
+
+**The idea:** a score is the *expected Mantra points* of the player in the next match, above a replacement player, × the probability that he starts:
+
+```
+score = 15 × startProb × (expectedPoints − 5.0)      // floored at 0; 15 score units = 1 Mantra point
+```
 
 ---
 
@@ -10,19 +16,20 @@ It ranks each squad player so the auto-select can pick the best XI for a matchda
 
 | Input | Source | Notes |
 |---|---|---|
-| `player` | `SquadPlayer` from MongoDB | Includes `mantraPositions`, `lineupStatus`, `availabilityPct` |
-| `analytics` | `PlayerAnalytics` from `/api/leagues/[id]/analytics` | Season stats from CDN: rating, goals, xG, tackles, CS, saves, minutes, and more. Also carries `priorSeason` (previous completed season, partial stats) for early-season blending |
-| `fix` | `TeamFixture` from `/api/leagues/[id]/fixtures` | Next fixture with difficulty 1–5 |
-| `odds` | `FixtureOdds` from `/api/matches/[id]/odds` | Decimal odds: home/draw/away |
-| `form` | `PlayerRecentMatch[]` from `/api/leagues/[id]/form` | Last 5 team matches (W/D/L + score) — blended with season rating when ≥3 rated matches |
-| `teamForm` | `TeamForm` — computed from `form` | Aggregated wins/draws/losses/CS rate for the team's last 5 matches |
+| `player` | `SquadPlayer` from MongoDB | `mantraPositions`, `lineupStatus`, `availabilityPct` (+ `availabilityPctSource`) |
+| `analytics` | `PlayerAnalytics` from `/api/leagues/[id]/analytics` | Season stats: rating, matches/minutes, goals, assists, xG, key passes, big chances created. Also carries `priorSeason` (previous completed season) for early-season blending |
+| `fix` | `TeamFixture` from `/api/leagues/[id]/fixtures` | Next fixture: `isHome`, `round`, `difficulty` 1–5 (fallback only) |
+| `odds` | `FixtureOdds` from `/api/matches/[id]/odds` | Decimal 1X2 odds: home/draw/away |
+| `form` | `PlayerRecentMatch[]` from `/api/leagues/[id]/form` | Only the per-match **ratings** are used (blend with the season rating when ≥3 rated matches). The form route is derived from team results, so ratings are `null` and this blend is inactive in practice |
 
 ### Analytics data source
 
 `PlayerAnalytics` is assembled in the analytics API route from three sources:
 1. **Team endpoint** (`/api/data/teams`) — rating, goals, assists, yellow/red cards
 2. **Rating rankings** (`data.fotmob.com/stats/.../rating.json`) — leagueRank, matchesPlayed, minutesPlayed
-3. **CDN stat lists** (`fetchLeagueAllPlayerStats`) — tackles, interceptions, clearances, xG, shots, chancesCreated, cleanSheets, saves, goalsConceded, foulsCommitted, and more (19 categories total, fetched in parallel and merged into one cache document)
+3. **CDN stat lists** (`fetchLeagueAllPlayerStats`) — xG, chancesCreated, bigChancesCreated and 16 more categories
+
+**Caveat — CDN lists are partial and some fields are mis-extracted.** The CDN stat lists only contain players who rank in them (e.g. `cleanSheets` exists for ~30 of 537 PL players, `saves` for ~20), so a missing value means "not in the list", read as 0. `calcScore` therefore only uses fields that are present for most outfield players *and* verified against match data: `goals`, `assists`, `expectedGoals`, `chancesCreated`, `bigChancesCreated`, `rating`, `matchesPlayed`, `minutesPlayed`. Do **not** add `shots` (the CDN `SubStatValue` of `ontarget_scoring_att` is the shot *accuracy %*, not a count), `foulsCommitted`, `bigChancesMissed` or `possessionWonFinal3rd` without re-checking their semantics (see `docs/refactor-backlog.md` §10). `successfulDribbles`, `aerialsWon`, `dribbledPast`, `highClaims` are never fetched.
 
 ### Early-season blending (previous season)
 
@@ -32,13 +39,12 @@ Early in a season every player's current stats are 0/null, which would make ever
 wConf = min(1, matchesPlayed / 4)            // trust in current-season data, ramps 0 → 1 over 4 matches
 pm(cur, prior)  = per-match rate:  cur/matchesPlayed * wConf + prior/priorMatches * (1 - wConf)
                   (only current or only prior available → that one; neither → 0)
-pmOr(cur, prior, fallback) = pm(...) if either exists, else fallback (e.g. goals/match instead of xG)
+pmOr(cur, prior, fallback) = pm(...) if either exists, else fallback (xG missing → goals per match)
 seasonRating = cur * wConf + prior * (1 - wConf)   (cur ?? prior ?? 6.0 when one side is missing)
+rating       = formRating != null ? seasonRating * 0.6 + formRating * 0.4 : seasonRating
 ```
 
-Every `stat/MP` term below means `pm(analytics.stat, priorSeason.stat)`. Save %, and average minutes per match are blended the same way with `wConf`. `getSquadPriorSeasonStats` (`lib/squadStats.ts`) estimates a missing `matchesPlayed` from minutes (`round(min/90)`).
-
-The `playerData` endpoint (per-player rich stats) is Turnstile-blocked for server-side requests and no longer used in the analytics route.
+Every `stat/MP` term below means `pm(analytics.stat, priorSeason.stat)`. `getSquadPriorSeasonStats` (`lib/squadStats.ts`) estimates a missing `matchesPlayed` from minutes (`round(min/90)`).
 
 ---
 
@@ -46,207 +52,90 @@ The `playerData` endpoint (per-player rich stats) is Turnstile-blocked for serve
 
 If `player.lineupStatus === 'injured'` or `'suspended'`, the function immediately returns `total: -999` so these players are never auto-selected. They can still be manually added by clicking in the squad list.
 
----
-
-## Score components
-
-### 1. Rating score (0–∞, typical 0–18)
-
-```
-seasonRating = blend of analytics.rating and priorSeason.rating (see Early-season blending; 6.0 if neither)
-formRating   = average of last 5 match ratings where minutesPlayed > 30 (null if < 3 rated matches)
-blendedRating = formRating != null ? seasonRating * 0.6 + formRating * 0.4 : seasonRating
-ratingScore  = max(0, (blendedRating - 6.0) * 15)
-```
-
-FotMob ratings run roughly 6.0–8.5. A 7.0 rating = 15 points; 7.5 = 22.5 points; 8.0 = 30 points. Players with no rating data default to 6.0 (zero points).
-
-**Form blend:** The form data from `/api/leagues/[id]/form` is derived from the fixtures cache (team results) and does not include individual player ratings (`rating: null`). The 40% form weight therefore only activates if `fetchPlayerRecentMatches` (Turnstile-blocked) has previously populated per-match ratings for that player. In practice the blend is currently always 100% season rating.
-
-### 2. Fixture score (0–16)
-
-```
-fixtureScore = (difficulty - 1) * 4
-```
-
-`difficulty` 1–5 from league table position. Easy fixture (5) = 16 points; hard fixture (1) = 0 points. A player with no upcoming fixture gets `-25` penalty.
-
-- difficulty 1 → fixtureScore = 0 (hardest opponent)
-- difficulty 5 → fixtureScore = 16 (easiest opponent)
-
-### 3. Odds score (0–15)
-
-```
-winProb = 1 / teamOdds   (home odds if playing at home, away odds otherwise)
-oddsScore = winProb * 15
-```
-
-Win probability from decimal odds. A team with odds 1.5 (67% win prob) = 10 points; odds 2.0 (50%) = 7.5 points.
-
-If odds are unavailable, a rough estimate from difficulty is used:
-```
-winProb ≈ difficulty * 0.1 - 0.05   (0.05 for difficulty 1, 0.45 for difficulty 5)
-```
-
-### 4. Position-specific score
-
-This is the most complex component. It rewards players based on stats that matter for their Mantra scoring role.
-
-**Clean sheet probability** (used by GK and DEF):
-```
-baseCsProb = difficulty * 0.075 - 0.025
-csFromOdds = winProb > 0 ? min(0.55, baseCsProb + winProb * 0.15) : baseCsProb
-csProb = teamForm.matches >= 3
-  ? csFromOdds * 0.5 + teamForm.csRate * 0.5
-  : csFromOdds
-```
-When 3+ recent matches are available, the team's actual CS rate is blended 50/50 with the odds-based estimate.
-
-**GK:**
-```
-effectiveCsProb = actualCsRate ? csProb * 0.4 + actualCsRate * 0.6 : csProb
-svPctBonus = max(0, savePercentage - 65) * 0.1
-positionScore = effectiveCsProb * csBonus * 12 + saves/MP * 0.4
-              + svPctBonus + goalsPrevented/MP * 5 + highClaims/MP * 0.4
-              - goalsConceded/MP * 0.2
-```
-
-`csBonus` for GK = 1.5 (Mantra awards +1.5 for GK clean sheet). `goalsPrevented` multiplier raised to 5 (was 3) — this stat directly captures saves that prevented goals.
-
-**DEF:**
-```
-defContrib = tackles/MP * 0.8 + interceptions/MP * 1.0 + clearances/MP * 0.4
-           + blockedShots/MP * 0.8 + possessionWonFinal3rd/MP * 0.5
-           + aerialsWon/MP * 0.4 - dribbledPast/MP * 0.5 - foulsCommitted/MP * 0.25
-positionScore = csProb * csBonus * 10 + goalsPerMatch * goalBonus * 6
-              + assistsPerMatch * 4 + defContrib
-```
-
-`csBonus`: RB/CB/LB = 1.0, WB/DM = 0.5.
-`goalBonus` (by native positions, official rule since 01.06.2026): ST or FW = 2, AM or W (no ST/FW) = 2.5, others = 3.
-
-**MID — split by sub-role:**
-
-DM (pure defensive midfielder — has DM but not AM or W):
-```
-positionScore = xgPerMatch * goalBonus * 5 + kpPerMatch * 3
-              + shots/MP * 0.1 + bigChancesCreated/MP * 2
-              + successfulDribbles/MP * 0.2
-              + tackles/MP * 0.8 + interceptions/MP * 1.2 + clearances/MP * 0.3
-```
-
-AM or W (attacking/wide midfielder):
-```
-positionScore = xgPerMatch * goalBonus * 9 + kpPerMatch * 7
-              + shots/MP * 0.2 + bigChancesCreated/MP * 5
-              + successfulDribbles/MP * 0.5
-              + tackles/MP * 0.15 + interceptions/MP * 0.2
-```
-
-CM (balanced central midfielder):
-```
-positionScore = xgPerMatch * goalBonus * 7 + kpPerMatch * 5
-              + shots/MP * 0.15 + bigChancesCreated/MP * 4
-              + successfulDribbles/MP * 0.3
-              + tackles/MP * 0.4 + interceptions/MP * 0.6
-```
-
-**FWD — split by sub-role:**
-
-W (wide forward — has W but not ST or FW):
-```
-positionScore = xgPerMatch * goalBonus * 8 + chancesCreated/MP * 3
-              + assistsPerMatch * 6 + shots/MP * 0.2
-              + bigChancesCreated/MP * 3 + successfulDribbles/MP * 0.6
-              - bigChancesMissed/MP * 1.5
-```
-
-ST / FW (central striker / forward):
-```
-positionScore = xgPerMatch * goalBonus * 10 + assistsPerMatch * 5
-              + shots/MP * 0.25 + bigChancesCreated/MP * 2
-              + successfulDribbles/MP * 0.4 + aerialsWon/MP * 0.3
-              - bigChancesMissed/MP * 2.0
-```
-
-### 5. Minutes score (0–10, linear)
-
-```
-avgMinutes = minutesPlayed / matchesPlayed
-minutesScore = round(min(10, (avgMinutes / 90) * 12))
-```
-
-Linear scale: 90 min/game = 12 → capped at 10. 75 min/game ≈ 10 pts; 60 min/game = 8 pts; 45 min/game = 6 pts.
-
-Rewards players who play most of the match. Replaces the old step-function (82+→10, 70+→7, 55+→4, 40+→1) which created large cliff effects.
-
-### 6. Team form bonus (approx −4 to +4)
-
-```
-teamForm = computeTeamForm(playerFormMatches)   // last 5 results with non-null result
-formBonus = teamForm.matches >= 3
-  ? ((wins - losses) / matches) * 4
-  : 0
-```
-
-Rewards players on winning teams and penalises players on losing streaks. A team with 4W 1L in last 5 = +2.4; a team with 1W 4L = −2.4; 3W 2L = +1.6; 2W 2L 1D = 0. Requires at least 3 results with non-null outcome.
+No upcoming fixture (blank gameweek) → `startProb = 0` → `total = 0`.
 
 ---
 
-## Availability multiplier
+## Expected points if the player starts
 
 ```
-total = max(0, baseTotal) * (availabilityPct / 100)
+expectedPoints = w.intercept + w.rating × rating
+               + w.winProb × winProb + w.oppWinProb × oppWinProb + w.drawProb × drawProb
+               + csBonus × (w.csWin × winProb + w.csOppWin × oppWinProb)               // defenders only
+               + w.xgGoalBonus × xG/MP × goalBonus + w.assist × assists/MP
+               + w.chanceCreated × chancesCreated/MP + w.bigChance × bigChancesCreated/MP
 ```
 
-`availabilityPct` (0–100, default 100) is set manually by the user in TeamSquadView. It represents expected playing time/start probability for the upcoming match.
+`w` = `SCORE_WEIGHTS.byGroup[group]` (group = GK/DEF/MID/FWD of the first Mantra position). `xG/MP` falls back to goals/MP. `goalBonus` is the official native-position goal bonus (ST/FW 2, AM/W 2.5, others 3 — rule in force since 01.06.2026), `csBonus` the clean-sheet bonus of the primary position (GK 1.5, RB/CB/LB 1, WB/DM 0.5).
 
-- 100% → full score (certain starter)
-- 75% → 75% of score (likely starter)
-- 50% → 50% of score (bench, uncertain)
-- 0% → score = 0 (not expected to play, but not blocked)
+### Match context: 1X2 odds → probabilities
 
-This naturally pushes low-availability players down in auto-select without requiring a hard block. A 50% player can still be manually selected.
+```
+winProb = 1 / (odds of the player's team)    oppWinProb = 1 / (odds of the opponent)    drawProb = 1 / (draw odds)
+```
+A missing or ≤1 price falls back to the empirical average for the fixture difficulty (1…5): winProb 0.244 / 0.348 / 0.411 / 0.448 / 0.503, oppWinProb 0.587 / 0.455 / 0.381 / 0.342 / 0.296, drawProb 0.28. Raw `1/odds` are used (not normalised) — the fit used them the same way.
+
+### Weights (`SCORE_WEIGHTS.byGroup`, pinned in `tourScoring.weights.test.ts`)
+
+| | GK | DEF | MID | FWD |
+|---|---|---|---|---|
+| intercept | 6.465 | 6.735 | 6.202 | 6.275 |
+| rating | 0.03 | 0.058 | 0.144 | 0.169 |
+| winProb | 1.03 | 0.518 | 0.995 | 1.149 |
+| oppWinProb | −1.33 | −0.578 | −0.796 | −0.901 |
+| drawProb | 1.906 | 0.6 | −0.726 | −1.115 |
+| xG × goalBonus | – | 0.42 | 0.549 | 0.39 |
+| assists / MP | – | – | 0.095 | – |
+| chancesCreated / MP | – | 0.168 | 0.16 | 0.126 |
+| bigChancesCreated / MP | – | 0.166 | 0.181 | 0.201 |
+| csBonus × winProb | – | 0.482 | – | – |
+| csBonus × oppWinProb | – | −0.475 | – | – |
+
+Reading it: one point of rating above 6 moves the expected points by only 0.03–0.17 (a season average is a weak predictor of a single match — regression to the mean), whereas the *match* moves them a lot: from a toss-up against a strong side to a heavy home favourite the expected points of an attacker rise by ~1. Draw-prone matches help GKs/defenders (clean sheets) and hurt attackers. Defensive stats (tackles, interceptions, clearances…) and team form had no predictive value beyond these terms and are not used.
 
 ---
+
+## Start probability
+
+```
+startProb = availabilityPct set by hand ('manual' / unknown source)      → availabilityPct / 100
+          = availabilityPct 'suggested' (last-5-matches form)             → 0.6 × availabilityPct/100 + 0.4 × model
+          = not set                                                       → model
+model     = sigmoid(−2.46 + 3.67 × share + 0.89 × avgMinutes/90)
+```
+
+`share` = share of his team's minutes: `min(1, minutes / (teamMatches × 90))`, blended with last season's `min(1, priorMinutes / (34 × 90))` while the season is young (`wCur = min(1, teamMatches/6)`); `teamMatches = max(matchesPlayed, round − 1)` (the fixture's round; rounds restart in playoffs). `avgMinutes` is the `wConf`-blended minutes per appearance. No minutes data at all (e.g. Ukrainian league, FotMob rating list is 403) → neutral 0.5. AUC of the model on held-out matches: 0.81 (the old "average minutes per appearance" had 0.75: it ignores rotation).
+
+Start probability is the single most valuable input: without it the model *loses* to the old formula, with it the XI gets ~1 extra player who actually plays.
 
 ## Total score
 
 ```
-baseTotal = ratingScore + fixtureScore + oddsScore + positionScore + minutesScore + formBonus - noFixturePenalty
-total = max(0, baseTotal) * (availabilityPct / 100)
+total = max(0, 15 × startProb × (expectedPoints − 5.0))
 ```
 
-`noFixturePenalty = 25` when the player has no upcoming fixture (blank gameweek, cup only). This is a strong penalty that pushes fixture-less players below most available players.
+`5.0` (`SCORE_WEIGHTS.replacement`) is the points a bench replacement is assumed to bring, so the score is "points above replacement". `15` = `SCORE_UNITS_PER_MANTRA_POINT` (also the defence-bonus conversion rate).
 
----
+### Score tiers (display only, `components/tour/tourUi.ts`)
 
-## Score tiers (display only)
-
-| Score | Tier | Color |
-|---|---|---|
-| 55+ | Elite | Emerald |
-| 38–54 | Good | Blue |
-| 22–37 | Average | Gray |
-| < 22 | Low | Dim |
+| Score | Tier | Color | Meaning (held-out starters) |
+|---|---|---|---|
+| 31+ | Elite | Emerald | top ~20 % |
+| 18–30 | Good | Blue | |
+| 6–17 | Average | Gray | |
+| < 6 | Low | Dim | |
 
 ---
 
 ## Out-of-position penalty (malus)
 
-When a player fills a slot outside their registered Mantra positions, a malus is applied directly to their expected FotMob match rating before scoring:
+When a player fills a slot outside his registered Mantra positions the real game subtracts the malus from his match score. The malus is therefore applied **linearly** to the total, only if he plays:
 
 ```
-effectiveRating = baseRating + malus   (malus is negative)
-effectiveRatingScore = max(0, (effectiveRating - 6.0) * 15)
+effectiveScore = max(0, total + malus × 15 × startProb)       // malus is negative
 ```
 
-**Examples:**
-- Player rated 6.0, malus −1.5 → effective rating 4.5 → ratingScore 0
-- Player rated 7.5, malus −1.5 → effective rating 6.0 → ratingScore 0
-- Player rated 8.0, malus −1.5 → effective rating 6.5 → ratingScore 7.5
-
-The malus only reduces the rating component. Goal bonuses, clean sheet bonuses, fixture score, and minutes score are **unaffected** — those are awarded based on the player's actual actions, not their position slot.
+**Examples** (`startProb` 1): total 42, malus −1.5 → 42 − 22.5 = 19.5; malus −3 → −3 × 15 = −45 → floored at 0. (Older versions only reduced the rating component, floored at 0, which let weakly-rated out-of-position players off almost free.) Goal bonuses, clean-sheet bonuses and everything else are unaffected — they are awarded for the player's actual actions, not his slot.
 
 ### Malus values (`POSITION_MALUS` in `lib/tourModules.ts` — source of truth)
 
@@ -266,10 +155,6 @@ The malus only reduces the rating component. Goal bonuses, clean sheet bonuses, 
 | FW | FW | ST | W, AM |
 | ST | ST | FW | W |
 
-`effectiveScore(breakdown, pen)` recomputes only the rating component with `baseRating + pen` (scaled by `availabilityPct`) and floors the total at 0.
-
----
-
 ## Auto-select algorithm
 
 `autoSelect()` uses the scoring to fill a formation.
@@ -286,13 +171,13 @@ For each module, slots are filled with a **constrained-slot-first** greedy appro
 
 ### Step 2 — Pick the best module
 
-Unless the user pinned a formation chip, every module is assigned and the one with the **highest `assignmentScore`** wins: the sum of `effectiveScore` over the GK and 10 slots (out-of-position players already lose rating points via the malus) **plus the team defence bonus**. Infeasible modules are skipped. Implemented by `pickBestModule()` in `lib/tourModules.ts`.
+Unless the user pinned a formation chip, every module is assigned and the one with the **highest `assignmentScore`** wins: the sum of `effectiveScore` over the GK and 10 slots (out-of-position players already lose their malus points) **plus the team defence bonus**. Infeasible modules are skipped. Implemented by `pickBestModule()` in `lib/tourModules.ts`.
 
 #### Defence bonus
 
 Official rule (mantrafootball.org/rules): the team gets 0–5 points from the **average base score** of the module's defenders — <7.00 → 0, 7.00–7.24 → 1, 7.25–7.49 → 2, 7.50–7.74 → 3, 7.75–7.99 → 4, ≥8.00 → 5. The malus does not affect it, and the goalkeeper is excluded.
 
-In the app: base score = `scoreBreakdown.baseRating` (blended season/form rating, unpenalised); defenders = the module's back-line slots (slots accepting only RB/CB/LB — **3 in 3-x-x, 4 in 4-x-x; wing-backs not counted**, an assumption to verify against the rules page). The bonus is converted at `SCORE_UNITS_PER_MANTRA_POINT = 15` (the same rate as `(rating − 6) × 15`, i.e. 1 Mantra point ≈ 1 rating point), so a 5-point bonus is worth 75 score units when comparing formations. It is not added to individual player scores. The tour header shows the result as "Def. bonus".
+In the app: base score = `scoreBreakdown.baseRating` (blended season/form rating, unpenalised); defenders = the module's back-line slots (slots accepting only RB/CB/LB — **3 in 3-x-x, 4 in 4-x-x; wing-backs not counted**, an assumption to verify against the rules page). The bonus is converted at `SCORE_UNITS_PER_MANTRA_POINT = 15` (the same rate as player scores: 1 Mantra point = 15 units), so a 5-point bonus is worth 75 score units when comparing formations. It is not added to individual player scores. The tour header shows the result as "Def. bonus".
 
 #### Refinement step (`improveAssignment`)
 
@@ -312,42 +197,29 @@ Without it, a greedy fill might consume the squad's only RB in a flexible `WB/RB
 
 ## Score breakdown display
 
-The `ScoreBreakdown` interface tracks each component separately:
-
 ```typescript
 interface ScoreBreakdown {
-  total: number;
-  baseRating: number;   // blended season+form rating (e.g. 7.2)
-  rating: number;       // ratingScore component
-  fixture: number;      // fixtureScore component
-  odds: number;         // oddsScore component
-  position: number;     // positionScore component
-  minutes: number;      // minutesScore component
-  form: number;         // team form bonus component
-  availability: number; // availabilityPct (0–100)
+  total: number;          // score units, see above (−999 = blocked)
+  baseRating: number;     // blended season/form rating, unpenalised (input of the defence bonus)
+  expectedPoints: number; // expected Mantra points if he starts
+  startProb: number;      // 0–1
+  rating: number;         // score units (already × startProb) from the player's rating above 6
+  context: number;        // … from the match context (odds, clean-sheet terms)
+  attack: number;         // … from xG × goal bonus, assists, chances created, big chances
+  availability: number;   // startProb × 100
 }
 ```
 
-In the Tour page, each `SquadRow` card shows:
-- **Score badge** with the total score coloured by tier
-- **Micro-bar** (5-segment) below the badge showing the proportion from each component:
-  - Yellow = rating, Blue = fixture, Green = position stats, Purple = minutes, Teal = form
-- **Hover tooltip** listing all five components numerically
-
-The breakdown is display-only — `autoSelect()` uses `total` only.
+`rating`, `context` and `attack` exclude the intercept, so they do not sum to `total`; they only show *what drives* a score. In the Tour page each `SquadRow` shows the score badge (coloured by tier), a 3-segment micro-bar (yellow = rating, blue = context, green = attack) and a hover tooltip with expected points, start probability and the three parts. The breakdown is display-only — `autoSelect()` uses `total` (and `baseRating` for the defence bonus).
 
 ## Tuning the weights
 
-If auto-select consistently produces poor picks, adjust these constants in `calcScore()` (`lib/tourScoring.ts`). `tourScoring.weights.test.ts` pins the documented values — changing a weight on purpose means updating this doc and those expected numbers together:
+Do not hand-tune: re-fit with `scripts/weights-research` (`docs/scoring-research.md`), which needs the Mantra rules in `build_table.py` to match https://mantrafootball.org/rules (they change between seasons — goal bonus changed on 01.06.2026). Then paste the numbers into `SCORE_WEIGHTS`, update the table above and `tourScoring.weights.test.ts` together.
 
-| Parameter | Default | Effect if increased |
+| Knob | Default | Effect if increased |
 |---|---|---|
-| Rating multiplier | `* 15` | Prioritises higher-rated players more |
-| Fixture multiplier | `* 4` (max 16) | Prioritises easy fixtures more |
-| Odds multiplier | `* 15` | Prioritises better win probability more |
-| CS probability × csBonus × `12` | 12 | Prioritises GK/DEF with expected clean sheets |
-| GK goalsPrevented multiplier | `* 5` | Weights shot-stopping GKs more |
-| xG × goalBonus × `10` | 10 (ST/FW; goalBonus 2) | Prioritises high-xG forwards |
-| Form bonus multiplier | `* 4` | Weights team momentum more strongly |
-| `noFixturePenalty` | `25` | Makes blank-gameweek players less likely to be selected |
-| `availabilityPct` divisor | `100` | Always `/ 100` (percentage to decimal) |
+| `replacement` | `5.0` | Lowers every score by the same amount per start-probability; a high value punishes low-probability players more. Zero point of the score; 0–5 gave the same results in the backtest, 6.5 was worse |
+| `startProb.suggestedBlend` | `0.4` | Trusts the season-long minutes model more than the "last 5 matches" suggestion (0.3–0.5 were equal in the backtest) |
+| `startProb.unknown` | `0.5` | Start probability of a player without any minutes data |
+| `byGroup.*` | table above | see `docs/scoring-research.md` |
+| `SCORE_UNITS_PER_MANTRA_POINT` | `15` | Scale of scores; also the weight of the defence bonus (1 point = 15 units) and of the malus |

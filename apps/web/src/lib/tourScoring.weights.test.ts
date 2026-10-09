@@ -1,179 +1,140 @@
 import { describe, expect, it } from 'vitest';
-import { calcScore, computeTeamForm } from './tourScoring';
-import { makePlayer, makeForm } from './testUtils';
+import { calcScore, matchContext, SCORE_WEIGHTS } from './tourScoring';
+import { makePlayer } from './testUtils';
 import type { PlayerAnalytics } from '@/app/api/leagues/[id]/analytics/route';
 import type { FixtureOdds, TeamFixture } from '@/lib/fotmob';
 import type { MantraPosition, PositionGroup } from '@/types/squad';
 
 /**
- * Pins the numeric weights documented in docs/scoring.md. Expected values are computed by hand
- * from the documented formulas — if you change a weight on purpose, update the doc AND these numbers.
+ * Pins the numeric weights documented in docs/scoring.md. Expected values are computed by hand from the
+ * documented formula — if you change a weight on purpose (re-fit with scripts/weights-research), update the
+ * doc AND these numbers.
  */
 
-const noForm = computeTeamForm([]);
 const analytics = (o: Record<string, unknown> = {}) =>
   ({ playerId: 1, matchesPlayed: 10, minutesPlayed: 900, positionGroup: 'MID', ...o }) as unknown as PlayerAnalytics;
-const fixture = (difficulty: number | null = 3, isHome = true) =>
-  ({ matchId: 'f1', difficulty, isHome }) as unknown as TeamFixture;
+const fixture = (difficulty: number | null = 3, isHome = true, round = '11') =>
+  ({ matchId: 'f1', difficulty, isHome, round }) as unknown as TeamFixture;
 const player = (positions: MantraPosition[], group: PositionGroup, extra: object = {}) =>
-  makePlayer({ id: 1, mantraPositions: positions, positionGroup: group, ...extra });
+  makePlayer({ id: 1, mantraPositions: positions, positionGroup: group, availabilityPct: 100, ...extra });
+const score = (a: PlayerAnalytics | null, p: ReturnType<typeof player>, fix: TeamFixture | null = fixture(), odds: FixtureOdds | null = null) =>
+  calcScore(p, a, fix, odds, []);
 
-const score = (
-  a: PlayerAnalytics | null,
-  opts: { fix?: TeamFixture | null; odds?: FixtureOdds | null; form?: ReturnType<typeof makeForm>[]; teamForm?: ReturnType<typeof computeTeamForm>; p?: ReturnType<typeof player> } = {},
-) => calcScore(opts.p ?? player(['CM'], 'MID'), a, opts.fix === undefined ? fixture() : opts.fix, opts.odds ?? null, opts.form ?? [], opts.teamForm ?? noForm);
-
-describe('rating component: max(0, (rating − 6) × 15)', () => {
-  it.each([[7.0, 15], [7.5, 22.5], [6.0, 0], [5.0, 0]])('rating %f → %f', (r, expected) => {
-    expect(score(analytics({ rating: r })).rating).toBeCloseTo(expected);
-  });
-
-  it('defaults to 6.0 (0 points) with no rating data', () => {
-    expect(score(null).rating).toBe(0);
-    expect(score(null).baseRating).toBe(6);
-  });
-
-  it('blends 60% season + 40% recent form when ≥3 rated appearances exist', () => {
-    const form = [8, 8, 8].map((rating) => makeForm({ rating }));
-    // (7×0.6 + 8×0.4 − 6) × 15 = 21
-    expect(score(analytics({ rating: 7 }), { form }).rating).toBeCloseTo(21);
+describe('weights table (docs/scoring.md)', () => {
+  it('pins the fitted per-position coefficients', () => {
+    expect(SCORE_WEIGHTS.replacement).toBe(5);
+    expect(SCORE_WEIGHTS.startProb).toEqual({ intercept: -2.46, share: 3.67, avgMinutes: 0.89, unknown: 0.5, suggestedBlend: 0.4 });
+    expect(SCORE_WEIGHTS.byGroup.GK).toEqual({
+      intercept: 6.465, rating: 0.03, winProb: 1.03, oppWinProb: -1.33, drawProb: 1.906,
+      xgGoalBonus: 0, assist: 0, chanceCreated: 0, bigChance: 0, csWin: 0, csOppWin: 0,
+    });
+    expect(SCORE_WEIGHTS.byGroup.DEF).toEqual({
+      intercept: 6.735, rating: 0.058, winProb: 0.518, oppWinProb: -0.578, drawProb: 0.6,
+      xgGoalBonus: 0.42, assist: 0, chanceCreated: 0.168, bigChance: 0.166, csWin: 0.482, csOppWin: -0.475,
+    });
+    expect(SCORE_WEIGHTS.byGroup.MID).toEqual({
+      intercept: 6.202, rating: 0.144, winProb: 0.995, oppWinProb: -0.796, drawProb: -0.726,
+      xgGoalBonus: 0.549, assist: 0.095, chanceCreated: 0.16, bigChance: 0.181, csWin: 0, csOppWin: 0,
+    });
+    expect(SCORE_WEIGHTS.byGroup.FWD).toEqual({
+      intercept: 6.275, rating: 0.169, winProb: 1.149, oppWinProb: -0.901, drawProb: -1.115,
+      xgGoalBonus: 0.39, assist: 0, chanceCreated: 0.126, bigChance: 0.201, csWin: 0, csOppWin: 0,
+    });
   });
 });
 
-describe('early-season blending with the previous season', () => {
-  it('uses only the prior season when no matches were played yet (wConf = 0)', () => {
-    const a = analytics({ matchesPlayed: 0, rating: null, priorSeason: { rating: 7.2, matchesPlayed: 30 } });
-    expect(score(a).rating).toBeCloseTo((7.2 - 6) * 15);
+describe('matchContext: win / opponent-win / draw probability', () => {
+  const odds = { home: 2.0, draw: 4.0, away: 5.0 };
+
+  it('is 1 / decimal odds, from the player\'s side', () => {
+    expect(matchContext(fixture(3, true), odds)).toEqual({ winProb: 0.5, oppWinProb: 0.2, drawProb: 0.25 });
+    expect(matchContext(fixture(3, false), odds)).toEqual({ winProb: 0.2, oppWinProb: 0.5, drawProb: 0.25 });
   });
 
-  it('weights current vs prior by matchesPlayed/4 (2 matches → 50/50)', () => {
-    const a = analytics({ matchesPlayed: 2, rating: 6.0, priorSeason: { rating: 7.0, matchesPlayed: 30 } });
-    expect(score(a).rating).toBeCloseTo(7.5); // 6.5 → 0.5 × 15
-  });
-
-  it('uses only current data from 4 matches on', () => {
-    const a = analytics({ matchesPlayed: 4, rating: 7.0, priorSeason: { rating: 9.0, matchesPlayed: 30 } });
-    expect(score(a).rating).toBeCloseTo(15);
+  it('falls back to the empirical average for the difficulty when odds are missing or ≤ 1', () => {
+    expect(matchContext(fixture(1), null)).toEqual({ winProb: 0.244, oppWinProb: 0.587, drawProb: 0.28 });
+    expect(matchContext(fixture(5), { home: 1.0, draw: null, away: 3 })).toEqual({ winProb: 0.503, oppWinProb: 1 / 3, drawProb: 0.28 });
+    expect(matchContext(null, null).winProb).toBe(0.411);        // difficulty unknown → 3
   });
 });
 
-describe('fixture component: (difficulty − 1) × 4', () => {
-  it.each([[1, 0], [3, 8], [5, 16]])('difficulty %i → %i', (d, expected) => {
-    expect(score(null, { fix: fixture(d) }).fixture).toBe(expected);
+describe('expected points (start probability 1)', () => {
+  const odds = { home: 2.0, draw: 4.0, away: 5.0 };
+
+  it('MID (CM): intercept + rating + context + attack, hand-computed', () => {
+    const a = analytics({ rating: 7, expectedGoals: 5, assists: 3, chancesCreated: 20, bigChancesCreated: 5 });
+    const sb = score(a, player(['CM'], 'MID'), fixture(3, true), odds);
+    const attack = 0.549 * 0.5 * 3 + 0.095 * 0.3 + 0.16 * 2 + 0.181 * 0.5;     // xG 0.5/match × goal bonus 3
+    const expected = 6.202 + 0.144 * 7 + 0.995 * 0.5 - 0.796 * 0.2 - 0.726 * 0.25 + attack;
+    expect(sb.expectedPoints).toBeCloseTo(expected, 6);
+    expect(sb.total).toBeCloseTo((expected - 5) * 15, 6);
+    expect(sb.rating).toBeCloseTo(0.144 * 1 * 15, 6);                           // quality term = weight × (rating − 6)
+    expect(sb.attack).toBeCloseTo(attack * 15, 6);
   });
 
-  it('no fixture: difficulty defaults to 3 for the component but total takes a −25 penalty (floored at 0)', () => {
-    const withFix = score(analytics({ rating: 9 }), { fix: fixture(3) });
-    const without = score(analytics({ rating: 9 }), { fix: null });
-    expect(without.fixture).toBe(8);
-    expect(without.total).toBeCloseTo(Math.max(0, withFix.total - 25));
-  });
-});
-
-describe('odds component: win probability × 15', () => {
-  it('uses home odds at home and away odds away', () => {
-    const odds = { home: 2.0, draw: 3.5, away: 4.0 };
-    expect(score(null, { odds, fix: fixture(3, true) }).odds).toBeCloseTo(7.5);
-    expect(score(null, { odds, fix: fixture(3, false) }).odds).toBeCloseTo(15 / 4);
+  it('DEF (CB): adds the clean-sheet interaction csBonus × (win − opponent win)', () => {
+    const sb = score(analytics({ positionGroup: 'DEF', rating: 6.8 }), player(['CB'], 'DEF'), fixture(3, true), odds);
+    const expected = 6.735 + 0.058 * 6.8 + 0.518 * 0.5 - 0.578 * 0.2 + 0.6 * 0.25 + 1 * (0.482 * 0.5 - 0.475 * 0.2);
+    expect(sb.expectedPoints).toBeCloseTo(expected, 6);
   });
 
-  it('ignores missing or ≤1 odds', () => {
-    expect(score(null, { odds: { home: null, draw: 3, away: 3 } }).odds).toBe(0);
-    expect(score(null, { odds: { home: 1.0, draw: 3, away: 3 } }).odds).toBe(0);
-    expect(score(null).odds).toBe(0);
-  });
-});
-
-describe('minutes component: round(min(10, avg/90 × 12))', () => {
-  it.each([[900, 10], [450, 6], [675, 9], [0, 0]])('%i minutes over 10 matches → %i', (minutes, expected) => {
-    expect(score(analytics({ minutesPlayed: minutes })).minutes).toBe(expected);
-  });
-  it('is 0 without any data', () => expect(score(null).minutes).toBe(0));
-});
-
-describe('team form bonus: (W − L) / matches × 4, needs ≥3 results', () => {
-  it('4W 1L → +2.4, 1W 4L → −2.4', () => {
-    expect(score(null, { teamForm: { wins: 4, draws: 0, losses: 1, csRate: 0, matches: 5 } }).form).toBeCloseTo(2.4);
-    expect(score(null, { teamForm: { wins: 1, draws: 0, losses: 4, csRate: 0, matches: 5 } }).form).toBeCloseTo(-2.4);
-  });
-  it('is 0 with fewer than 3 matches', () => {
-    expect(score(null, { teamForm: { wins: 2, draws: 0, losses: 0, csRate: 0, matches: 2 } }).form).toBe(0);
-  });
-});
-
-describe('position component (difficulty 3, no odds → winProb 0.25, csProb 0.2375)', () => {
-  it('GK: CS prob blended with actual CS rate, saves, save %, goals prevented, claims, conceded', () => {
-    const a = analytics({
-      positionGroup: 'GK', cleanSheets: 4, saves: 30, savePercentage: 75, goalsPrevented: 2, highClaims: 10, goalsConceded: 12,
-    });
-    // effCs = 0.2375×0.4 + 0.4×0.6 = 0.335 → 0.335×1.5×12 = 6.03; +1.2 saves +1.0 sv% +1.0 prevented +0.4 claims −0.24 conceded
-    expect(score(a, { p: player(['GK'], 'GK') }).position).toBeCloseTo(9.39);
+  it('GK: rating and context only (no attack terms)', () => {
+    const sb = score(analytics({ positionGroup: 'GK', rating: 7, goals: 9, assists: 9 }), player(['GK'], 'GK'), fixture(3, true), odds);
+    expect(sb.expectedPoints).toBeCloseTo(6.465 + 0.03 * 7 + 1.03 * 0.5 - 1.33 * 0.2 + 1.906 * 0.25, 6);
+    expect(sb.attack).toBe(0);
   });
 
-  it('DEF (CB): CS prob × 1.0 × 10 + goals × goalBonus × 6 + defensive actions', () => {
-    const a = analytics({ positionGroup: 'DEF', goals: 1, assists: 0, tackles: 20, interceptions: 10 });
-    // 2.375 + 0.1×3×6 (1.8) + 2×0.8 (1.6) + 1×1.0 (1.0)
-    expect(score(a, { p: player(['CB'], 'DEF') }).position).toBeCloseTo(6.775);
+  it('uses goals per match when xG is unavailable in both seasons', () => {
+    const base = { positionGroup: 'FWD', rating: 6 };
+    const withXg = score(analytics({ ...base, expectedGoals: 5 }), player(['ST'], 'FWD'), fixture(), odds);
+    const withGoals = score(analytics({ ...base, goals: 5 }), player(['ST'], 'FWD'), fixture(), odds);
+    expect(withGoals.attack).toBeCloseTo(withXg.attack, 6);
   });
 
-  it('ST: xG × 2 × 10 + assists, shots, chances, dribbles, aerials − big chances missed', () => {
-    const a = analytics({
-      positionGroup: 'FWD', expectedGoals: 8, assists: 2, shots: 30, bigChancesCreated: 2,
-      successfulDribbles: 10, aerialsWon: 20, bigChancesMissed: 4,
-    });
-    // 16 + 1.0 + 0.75 + 0.4 + 0.4 + 0.6 − 0.8
-    expect(score(a, { p: player(['ST'], 'FWD') }).position).toBeCloseTo(18.35);
+  it('a goal is worth more to a defender / DM than to a striker (goal bonus 3 vs 2)', () => {
+    const a = analytics({ expectedGoals: 5 });
+    const dm = score(a, player(['DM'], 'MID')).attack;
+    const st = score(a, player(['ST'], 'MID')).attack;
+    expect(dm / st).toBeCloseTo(3 / 2, 6);
   });
 
-  describe('MID sub-roles and the winger forward (10 matches; goal bonus 3 for DM/CM, 2.5 for AM/W)', () => {
-    const base = {
-      expectedGoals: 5, chancesCreated: 20, shots: 20, bigChancesCreated: 5, successfulDribbles: 10,
-      tackles: 20, interceptions: 10, clearances: 10, assists: 3, bigChancesMissed: 4,
-    };
-
-    it('DM: defensive work weighted higher', () => {
-      // 7.5 xG + 6 kp + 0.2 shots + 1.0 bcc + 0.2 dribbles + 1.6 tackles + 1.2 int + 0.3 clearances
-      expect(score(analytics(base), { p: player(['DM'], 'MID') }).position).toBeCloseTo(18.0);
-    });
-
-    it('CM: balanced', () => {
-      // 10.5 + 10 + 0.3 + 2.0 + 0.3 + 0.8 + 0.6
-      expect(score(analytics(base), { p: player(['CM'], 'MID') }).position).toBeCloseTo(24.5);
-    });
-
-    it('AM and W: creativity weighted highest (same formula)', () => {
-      // 11.25 (0.5 xG × 2.5 × 9) + 14 + 0.4 + 2.5 + 0.5 + 0.3 + 0.2
-      expect(score(analytics(base), { p: player(['AM'], 'MID') }).position).toBeCloseTo(29.15);
-      expect(score(analytics(base), { p: player(['W'], 'MID') }).position).toBeCloseTo(29.15);
-    });
-
-    it('a DM who can also play AM uses the AM/W formula', () => {
-      expect(score(analytics(base), { p: player(['DM', 'AM'], 'MID') }).position).toBeCloseTo(29.15);
-    });
-
-    it('FWD winger (W without ST/FW): xG, chances, assists, dribbles, minus missed big chances', () => {
-      // 10 (0.5 xG × 2.5 × 8) + 6 + 1.8 + 0.4 + 1.5 + 0.6 − 0.6
-      expect(score(analytics({ ...base, positionGroup: 'FWD' }), { p: player(['W'], 'FWD') }).position).toBeCloseTo(19.7);
-    });
-
-    it('uses goals per match when xG is unavailable in both seasons', () => {
-      const a = analytics({ positionGroup: 'FWD', goals: 5 });
-      expect(score(a, { p: player(['ST'], 'FWD') }).position).toBeCloseTo(10); // 0.5 × 2 × 10
-    });
-  });
-
-  it('falls back to the player\'s effective Mantra group when analytics has no positionGroup', () => {
-    const a = analytics({ positionGroup: undefined, tackles: 20 });
-    expect(score(a, { p: player(['CB'], 'MID') }).position).toBeGreaterThan(0); // CB → DEF branch (CS term)
+  it('blends current and prior season per-match stats by matchesPlayed / 4', () => {
+    const a = analytics({ matchesPlayed: 2, minutesPlayed: 180, expectedGoals: 2, priorSeason: { matchesPlayed: 30, expectedGoals: 3, minutesPlayed: 2700 } });
+    // current 1.0 xG/match, prior 0.1 → 50/50 → 0.55
+    expect(score(a, player(['CM'], 'MID')).attack).toBeCloseTo(0.549 * 0.55 * 3 * 15, 6);
   });
 });
 
-describe('total', () => {
-  it('= max(0, sum of components − noFixturePenalty) × availability', () => {
-    const a = analytics({ rating: 7, minutesPlayed: 900 });
-    const full = score(a, { p: player(['CM'], 'MID', { availabilityPct: 100 }) });
-    const sum = full.rating + full.fixture + full.odds + full.position + full.minutes + full.form;
-    expect(full.total).toBeCloseTo(sum);
-    expect(score(a, { p: player(['CM'], 'MID', { availabilityPct: 75 }) }).total).toBeCloseTo(sum * 0.75);
+describe('monotonicity', () => {
+  const base = () => analytics({ rating: 7, expectedGoals: 3 });
+  const total = (o: FixtureOdds | null, a = base()) => score(a, player(['CM'], 'MID'), fixture(3, true), o).total;
+
+  it('a likelier own win raises the score, a likelier opponent win lowers it', () => {
+    expect(total({ home: 1.5, draw: 4, away: 6 })).toBeGreaterThan(total({ home: 2.5, draw: 3.5, away: 3.0 }));
+    expect(total({ home: 2.0, draw: 3.5, away: 8 })).toBeGreaterThan(total({ home: 2.0, draw: 3.5, away: 2.5 }));
+  });
+
+  it('better rating and more attacking output raise the score', () => {
+    const o = { home: 2.0, draw: 3.5, away: 4 };
+    expect(total(o, analytics({ rating: 7.5, expectedGoals: 3 }))).toBeGreaterThan(total(o));
+    expect(total(o, analytics({ rating: 7, expectedGoals: 6 }))).toBeGreaterThan(total(o));
+  });
+});
+
+describe('total = 15 × startProb × (expected points − replacement), floored at 0', () => {
+  it('scales linearly with start probability', () => {
+    const a = analytics({ rating: 7.2, expectedGoals: 4 });
+    const full = score(a, player(['CM'], 'MID')).total;
+    expect(score(a, player(['CM'], 'MID', { availabilityPct: 80 })).total).toBeCloseTo(full * 0.8, 6);
+  });
+
+  it('is 0 for a player expected to score below the replacement level', () => {
+    const original = SCORE_WEIGHTS.replacement;
+    SCORE_WEIGHTS.replacement = 10;                 // no fitted player is that bad, so raise the bar for the test
+    try {
+      expect(score(analytics({ rating: 7 }), player(['CM'], 'MID')).total).toBe(0);
+    } finally {
+      SCORE_WEIGHTS.replacement = original;
+    }
   });
 });
