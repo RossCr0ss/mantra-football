@@ -19,6 +19,7 @@
 
 ## Caching (details: `docs/cache.md`)
 - `mongoCache.ts` `withCache(collection, filter, CACHE_TTL.X, fetcher, {forceRefresh})` is **stale-while-revalidate** (`freshMs` / `staleMs`, deduped background refresh). TTL values live in `CACHE_TTL` in code — trust the code over docs.
+- `mongodb.ts` connects **lazily** on the first `getDb()` (and checks `MONGODB_URI` there). Never connect or throw at module top level — `next build` imports every route module without env vars (Vercel build failed on this).
 - New cached FotMob call = add fetcher to the matching `lib/fotmob/*.ts` file (use `fotmobFetch`, never raw `fetch` — MongoDB is the only cache layer), wrapper to `fotmobCache.ts`.
 - Fixtures: `fixturesCache.ts` (separate Map-serialising cache). Mantra positions: `mantraFootballCache.ts`.
 - Authenticated mantrafootball calls (login, roster) are never cached/persisted. All mantrafootball.org HTTP goes through `mantraFetch` (`no-store` + 15 s timeout) — don't use raw `fetch` there.

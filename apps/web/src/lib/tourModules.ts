@@ -241,6 +241,63 @@ export function assignmentScore(
 }
 
 /**
+ * Hill-climbs an assignment on `assignmentScore` (effective scores + defence bonus). The greedy
+ * `assignModule` cannot see the bonus tiers, e.g. that swapping one back-line player for a slightly
+ * lower-scored but higher-rated one lifts the average to the next tier. Moves: replace a slot's
+ * player with an unused eligible one, or swap two slots' players. Only strict improvements are
+ * taken, so the result is never worse than the input; the GK slot is untouched.
+ */
+export function improveAssignment(
+  assignment: ModuleAssignment,
+  available: EnrichedPlayer[],
+  slots: MantraPosition[][],
+  maxIterations = 50,
+): ModuleAssignment {
+  const byId = new Map(available.map((p) => [p.id, p]));
+  let ids = [...assignment.ids];
+  let penalty = [...assignment.penalty];
+  let current = assignmentScore({ ids, penalty }, byId, slots);
+
+  for (let iter = 0; iter < maxIterations; iter++) {
+    let bestGain = 1e-9;
+    let best: { ids: number[]; penalty: number[] } | null = null;
+    const used = new Set(ids);
+
+    const consider = (nextIds: number[], nextPen: number[]) => {
+      const gain = assignmentScore({ ids: nextIds, penalty: nextPen }, byId, slots) - current;
+      if (gain > bestGain) { bestGain = gain; best = { ids: nextIds, penalty: nextPen }; }
+    };
+
+    for (let s = 0; s < slots.length; s++) {
+      for (const cand of available) {
+        if (used.has(cand.id)) continue;
+        const pen = getSlotPenalty(slots[s], cand.mantraPositions);
+        if (pen === undefined) continue;
+        const nextIds = [...ids]; const nextPen = [...penalty];
+        nextIds[s + 1] = cand.id; nextPen[s + 1] = pen;
+        consider(nextIds, nextPen);
+      }
+      for (let t = s + 1; t < slots.length; t++) {
+        const a = byId.get(ids[s + 1]); const b = byId.get(ids[t + 1]);
+        if (!a || !b) continue;
+        const penA = getSlotPenalty(slots[t], a.mantraPositions);  // a moves to slot t
+        const penB = getSlotPenalty(slots[s], b.mantraPositions);  // b moves to slot s
+        if (penA === undefined || penB === undefined) continue;
+        const nextIds = [...ids]; const nextPen = [...penalty];
+        nextIds[s + 1] = b.id; nextIds[t + 1] = a.id;
+        nextPen[s + 1] = penB; nextPen[t + 1] = penA;
+        consider(nextIds, nextPen);
+      }
+    }
+
+    if (!best) break;
+    ({ ids, penalty } = best as { ids: number[]; penalty: number[] });
+    current += bestGain;
+  }
+  return { ids, penalty };
+}
+
+/**
  * Picks the formation for auto-select. A pinned module name is used as-is (null if infeasible);
  * otherwise every module is assigned and the highest `assignmentScore` wins.
  */
@@ -254,8 +311,9 @@ export function pickBestModule(
   let best: { moduleName: string; assignment: ModuleAssignment; defenceBonus: number } | null = null;
   let bestScore = -Infinity;
   for (const mod of candidates) {
-    const assignment = assignModule(available, mod.slots);
-    if (!assignment) continue;
+    const greedy = assignModule(available, mod.slots);
+    if (!greedy) continue;
+    const assignment = improveAssignment(greedy, available, mod.slots);
     const score = assignmentScore(assignment, byId, mod.slots);
     if (score > bestScore) {
       bestScore = score;

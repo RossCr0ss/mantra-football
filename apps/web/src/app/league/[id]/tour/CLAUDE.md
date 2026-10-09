@@ -2,7 +2,7 @@
 
 Page: `page.tsx` (UI + data loading only). Logic lives in `lib/`:
 - `lib/tourScoring.ts` — `calcScore`, `ScoreBreakdown`, `computeTeamForm`, `recentFormRating`, `isBlocked` (algorithm: `docs/scoring.md`)
-- `lib/tourModules.ts` — `MODULES` (formations — **source of truth**, slots per module), `POSITION_MALUS`, `getSlotPenalty`, `effectiveScore`, `enrichPlayers`, `assignModule`, and the formation choice: `pickBestModule` (= effective scores + team defence bonus via `defenceBonusPoints` / `assignmentScore`)
+- `lib/tourModules.ts` — `MODULES` (formations — **source of truth**, slots per module), `POSITION_MALUS`, `getSlotPenalty`, `effectiveScore`, `enrichPlayers`, `assignModule`, and the formation choice: `pickBestModule` (= greedy `assignModule` → `improveAssignment` local search, ranked by effective scores + team defence bonus via `defenceBonusPoints` / `assignmentScore`)
 - Formation/position reference: `docs/mantra-rules.md`
 
 ## Rules

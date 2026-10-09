@@ -33,7 +33,7 @@ Removed `fetchPlayerInjuryInfo`, `fetchPlayerSeasonStats` (+ its parsing helpers
 - No fetch-level cache in `fotmob.ts` (all `no-store`): server pages that call raw `fotmob.ts` functions hit FotMob every request — use `*Cached` wrappers.
 
 ## 9. Rules the app does not model (from https://mantrafootball.org/rules)
-- **Defence bonus**: now used when auto-select ranks formations (`pickBestModule`, see `docs/scoring.md`). Open questions: whether wing-backs count as defenders (currently not), and it does not yet steer *player* choice within a formation (only the formation ranking); the auction skill prints "defence clusters" as a rough proxy.
+- **Defence bonus**: now used when auto-select ranks formations (`pickBestModule`, see `docs/scoring.md`). Open questions: whether wing-backs count as defenders (currently not), player choice within a formation is refined by `improveAssignment` (local search, may leave local optima); the auction skill prints "defence clusters" as a rough proxy.
 - Team points → goals conversion (72 points = 1 goal, +1 goal per extra 7) — irrelevant for choosing players but relevant if a "projected result" feature is ever added.
 - The **position malus matrix** on the rules page is an image, so `POSITION_MALUS` cannot be verified automatically — compare it by eye after rule changes (the `-1.5` / `-3` steps are confirmed in the text).
 - Bonuses not in `calcScore`: saves (+0.5 for 3–5, +1 for 6+), penalties, cards/maluses — they are only reflected indirectly through xG/rating/stat proxies.

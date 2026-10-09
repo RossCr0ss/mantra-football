@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MODULES, getSlotPenalty, assignModule, effectiveScore, defenceBonusPoints, defenderSlotIndexes,
-  assignmentDefenceBonus, assignmentScore, pickBestModule, SCORE_UNITS_PER_MANTRA_POINT, type EnrichedPlayer,
+  assignmentDefenceBonus, assignmentScore, improveAssignment, pickBestModule, SCORE_UNITS_PER_MANTRA_POINT, type EnrichedPlayer,
 } from './tourModules';
 import { makePlayer } from './testUtils';
 import type { MantraPosition } from '@/types/squad';
@@ -170,5 +170,89 @@ describe('pickBestModule', () => {
     expect(pickBestModule(withBackLineRating(6.5))!.defenceBonus).toBe(0);
     expect(pickBestModule(withBackLineRating(7.3))!.defenceBonus).toBe(2);
     expect(pickBestModule(withBackLineRating(8.2))!.defenceBonus).toBe(5);
+  });
+});
+
+describe('improveAssignment', () => {
+  const rated = (id: number, pos: MantraPosition, group: 'GK' | 'DEF' | 'MID' | 'FWD', total: number, baseRating: number): EnrichedPlayer => {
+    const p = enriched(id, pos, group, total);
+    return { ...p, scoreBreakdown: { ...p.scoreBreakdown, baseRating } } as EnrichedPlayer;
+  };
+  const m352 = MODULES.find((m) => m.name === '3-5-2')!;
+  const byIdOf = (ps: EnrichedPlayer[]) => new Map(ps.map((p) => [p.id, p]));
+
+  // Three CBs score 30 each at rating 7.0 (avg 7.0 → bonus 1). A 4th CB scores 28 but is rated 8.4:
+  // swapping him in costs 2 score units and lifts the average to 7.47 (bonus 2 → +15 units).
+  const squad: EnrichedPlayer[] = [
+    rated(1, 'GK', 'GK', 50, 6.5),
+    rated(2, 'CB', 'DEF', 30, 7.0), rated(3, 'CB', 'DEF', 30, 7.0), rated(4, 'CB', 'DEF', 30, 7.0), rated(5, 'CB', 'DEF', 28, 8.4),
+    rated(6, 'WB', 'DEF', 25, 6.5), rated(7, 'WB', 'DEF', 25, 6.5),
+    rated(8, 'DM', 'MID', 30, 6.5), rated(9, 'DM', 'MID', 30, 6.5), rated(10, 'CM', 'MID', 30, 6.5),
+    rated(11, 'ST', 'FWD', 40, 6.5), rated(12, 'FW', 'FWD', 38, 6.5),
+  ];
+
+  it('swaps in a lower-scored defender when that lifts the back line to the next bonus tier', () => {
+    const greedy = assignModule(squad, m352.slots)!;
+    expect(greedy.ids.slice(1, 4).sort()).toEqual([2, 3, 4]);                 // greedy keeps the three 30-score CBs
+    const improved = improveAssignment(greedy, squad, m352.slots);
+    expect(improved.ids.slice(1, 4)).toContain(5);
+    const byId = byIdOf(squad);
+    expect(assignmentDefenceBonus(improved, byId, m352.slots)).toBe(2);
+    expect(assignmentScore(improved, byId, m352.slots)).toBeGreaterThan(assignmentScore(greedy, byId, m352.slots));
+    expect(pickBestModule(squad, '3-5-2')!.defenceBonus).toBe(2);
+  });
+
+  it('never makes an assignment worse, keeps players unique, the GK fixed and every slot eligible', () => {
+    const byId = byIdOf(squad);
+    for (const mod of MODULES) {
+      const greedy = assignModule(squad, mod.slots);
+      if (!greedy) continue;
+      const improved = improveAssignment(greedy, squad, mod.slots);
+      expect(assignmentScore(improved, byId, mod.slots), mod.name).toBeGreaterThanOrEqual(assignmentScore(greedy, byId, mod.slots) - 1e-9);
+      expect(new Set(improved.ids).size, mod.name).toBe(11);
+      expect(improved.ids[0], mod.name).toBe(greedy.ids[0]);
+      improved.ids.slice(1).forEach((id, i) => {
+        const pen = getSlotPenalty(mod.slots[i], byId.get(id)!.mantraPositions);
+        expect(pen, `${mod.name} slot ${i}`).toBeDefined();
+        expect(improved.penalty[i + 1], `${mod.name} slot ${i} penalty`).toBe(pen);
+      });
+    }
+  });
+
+  it('is idempotent and leaves an already-optimal assignment untouched', () => {
+    const once = improveAssignment(assignModule(squad, m352.slots)!, squad, m352.slots);
+    expect(improveAssignment(once, squad, m352.slots)).toEqual(once);
+  });
+
+  describe('synthetic slots', () => {
+    // 10 outfield slots: W and FW are deliberately mis-filled (FW-native at W, AM-native at FW).
+    const slots: MantraPosition[][] = [['W'], ['FW'], ['CB'], ['CB'], ['CB'], ['RB'], ['LB'], ['DM'], ['CM'], ['ST']];
+    const roster: EnrichedPlayer[] = [
+      rated(1, 'GK', 'GK', 50, 6.5),
+      rated(2, 'FW', 'FWD', 30, 6.5), rated(3, 'AM', 'MID', 30, 6.5),
+      rated(4, 'CB', 'DEF', 30, 6.5), rated(5, 'CB', 'DEF', 30, 6.5), rated(6, 'CB', 'DEF', 30, 6.5),
+      rated(7, 'RB', 'DEF', 30, 6.5), rated(8, 'LB', 'DEF', 30, 6.5),
+      rated(9, 'DM', 'MID', 30, 6.5), rated(10, 'CM', 'MID', 30, 6.5), rated(11, 'ST', 'FWD', 30, 6.5),
+    ];
+
+    it('swaps two slots and records each player\'s own new penalty', () => {
+      // FW at W: -3, AM at FW: -3. After the swap: AM at W = -1.5, FW at FW = 0.
+      const start = { ids: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], penalty: [0, -3, -3, 0, 0, 0, 0, 0, 0, 0, 0] };
+      const improved = improveAssignment(start, roster, slots);
+      expect(improved.ids.slice(1, 3)).toEqual([3, 2]);
+      expect(improved.penalty.slice(0, 3)).toEqual([0, -1.5, 0]);
+    });
+
+    it('only takes strictly better moves (an equal spare player does not replace the incumbent)', () => {
+      const clone = rated(99, 'CB', 'DEF', 30, 6.5);
+      const start = { ids: [1, 3, 2, 4, 5, 6, 7, 8, 9, 10, 11], penalty: [0, -1.5, 0, 0, 0, 0, 0, 0, 0, 0, 0] };
+      const better = improveAssignment(start, roster, slots);        // reach a local optimum first
+      expect(improveAssignment(better, [...roster, clone], slots, 1)).toEqual(better);  // one step: a zero-gain move must not be taken
+    });
+  });
+
+  it('respects the iteration cap', () => {
+    const greedy = assignModule(squad, m352.slots)!;
+    expect(improveAssignment(greedy, squad, m352.slots, 0)).toEqual(greedy);
   });
 });
