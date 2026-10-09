@@ -5,9 +5,14 @@ import { effectivePositionGroup } from '@/lib/positionGroups';
 
 // ─── Scoring ──────────────────────────────────────────────────────────────────
 
+/**
+ * Bonus for a scored goal, by the scorer's NATIVE positions (any of them, not just the first).
+ * Official rule since 01.06.2026 (mantrafootball.org/rules): +2 if ST or FW; +2.5 if AM or W
+ * (and no ST/FW); otherwise +3. Before that date FW was +2.5 and AM/W +3.
+ */
 export function goalBonus(mantraPositions: MantraPosition[]): number {
-  if (mantraPositions.includes('ST')) return 2;
-  if (mantraPositions.includes('FW')) return 2.5;
+  if (mantraPositions.includes('ST') || mantraPositions.includes('FW')) return 2;
+  if (mantraPositions.includes('AM') || mantraPositions.includes('W')) return 2.5;
   return 3;
 }
 

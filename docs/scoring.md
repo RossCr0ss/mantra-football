@@ -123,7 +123,7 @@ positionScore = csProb * csBonus * 10 + goalsPerMatch * goalBonus * 6
 ```
 
 `csBonus`: RB/CB/LB = 1.0, WB/DM = 0.5.
-`goalBonus`: ST primary = 2, FW primary = 2.5, others = 3.
+`goalBonus` (by native positions, official rule since 01.06.2026): ST or FW = 2, AM or W (no ST/FW) = 2.5, others = 3.
 
 **MID — split by sub-role:**
 
@@ -337,7 +337,7 @@ If auto-select consistently produces poor picks, adjust these constants in `calc
 | Odds multiplier | `* 15` | Prioritises better win probability more |
 | CS probability × csBonus × `12` | 12 | Prioritises GK/DEF with expected clean sheets |
 | GK goalsPrevented multiplier | `* 5` | Weights shot-stopping GKs more |
-| xG × goalBonus × `10` | 10 (ST/FW) | Prioritises high-xG forwards |
+| xG × goalBonus × `10` | 10 (ST/FW; goalBonus 2) | Prioritises high-xG forwards |
 | Form bonus multiplier | `* 4` | Weights team momentum more strongly |
 | `noFixturePenalty` | `25` | Makes blank-gameweek players less likely to be selected |
 | `availabilityPct` divisor | `100` | Always `/ 100` (percentage to decimal) |

@@ -52,7 +52,7 @@ export async function fetchLeagueStatsList(
  *     StatValue = season total, SubStatValue = secondary    → useSubStat: false
  *   - Percentages (_save_percentage) → StatValue = %       → useSubStat: false
  */
-const CDN_STAT_CONFIG: ReadonlyArray<readonly [string, keyof PlayerSeasonStats, boolean]> = [
+export const CDN_STAT_CONFIG: ReadonlyArray<readonly [string, keyof PlayerSeasonStats, boolean]> = [
   ['goals',                'goals',                 false],
   ['goal_assist',          'assists',               false],
   ['mins_played',          'minutesPlayed',         false],

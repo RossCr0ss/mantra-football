@@ -44,8 +44,18 @@ describe('calcScore', () => {
   });
 });
 
-describe('goalBonus', () => {
-  it('is lower for strikers than for non-forwards', () => {
-    expect(goalBonus(['ST'])).toBeLessThan(goalBonus(['CB']));
+describe('goalBonus (official rule since 01.06.2026)', () => {
+  // Examples taken from mantrafootball.org/rules
+  it.each([
+    ['Haaland (ST)', ['ST'], 2],
+    ['Cunha (FW)', ['FW'], 2],
+    ['Mbeumo (W, FW) — has FW', ['W', 'FW'], 2],
+    ['Fernandes (AM)', ['AM'], 2.5],
+    ['Saka (W)', ['W'], 2.5],
+    ['Semenyo (WB, W) — has W', ['WB', 'W'], 2.5],
+    ['Guimaraes (DM, CM)', ['DM', 'CM'], 3],
+    ['defender / goalkeeper', ['CB'], 3],
+  ] as const)('%s → +%f', (_name, positions, expected) => {
+    expect(goalBonus([...positions])).toBe(expected);
   });
 });

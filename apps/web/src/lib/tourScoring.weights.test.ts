@@ -125,7 +125,7 @@ describe('position component (difficulty 3, no odds → winProb 0.25, csProb 0.2
     expect(score(a, { p: player(['ST'], 'FWD') }).position).toBeCloseTo(18.35);
   });
 
-  describe('MID sub-roles and the winger forward (3 pts goal bonus; 10 matches)', () => {
+  describe('MID sub-roles and the winger forward (10 matches; goal bonus 3 for DM/CM, 2.5 for AM/W)', () => {
     const base = {
       expectedGoals: 5, chancesCreated: 20, shots: 20, bigChancesCreated: 5, successfulDribbles: 10,
       tackles: 20, interceptions: 10, clearances: 10, assists: 3, bigChancesMissed: 4,
@@ -142,18 +142,18 @@ describe('position component (difficulty 3, no odds → winProb 0.25, csProb 0.2
     });
 
     it('AM and W: creativity weighted highest (same formula)', () => {
-      // 13.5 + 14 + 0.4 + 2.5 + 0.5 + 0.3 + 0.2
-      expect(score(analytics(base), { p: player(['AM'], 'MID') }).position).toBeCloseTo(31.4);
-      expect(score(analytics(base), { p: player(['W'], 'MID') }).position).toBeCloseTo(31.4);
+      // 11.25 (0.5 xG × 2.5 × 9) + 14 + 0.4 + 2.5 + 0.5 + 0.3 + 0.2
+      expect(score(analytics(base), { p: player(['AM'], 'MID') }).position).toBeCloseTo(29.15);
+      expect(score(analytics(base), { p: player(['W'], 'MID') }).position).toBeCloseTo(29.15);
     });
 
     it('a DM who can also play AM uses the AM/W formula', () => {
-      expect(score(analytics(base), { p: player(['DM', 'AM'], 'MID') }).position).toBeCloseTo(31.4);
+      expect(score(analytics(base), { p: player(['DM', 'AM'], 'MID') }).position).toBeCloseTo(29.15);
     });
 
     it('FWD winger (W without ST/FW): xG, chances, assists, dribbles, minus missed big chances', () => {
-      // 12 + 6 + 1.8 + 0.4 + 1.5 + 0.6 − 0.6
-      expect(score(analytics({ ...base, positionGroup: 'FWD' }), { p: player(['W'], 'FWD') }).position).toBeCloseTo(21.7);
+      // 10 (0.5 xG × 2.5 × 8) + 6 + 1.8 + 0.4 + 1.5 + 0.6 − 0.6
+      expect(score(analytics({ ...base, positionGroup: 'FWD' }), { p: player(['W'], 'FWD') }).position).toBeCloseTo(19.7);
     });
 
     it('uses goals per match when xG is unavailable in both seasons', () => {

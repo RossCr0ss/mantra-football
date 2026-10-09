@@ -26,7 +26,7 @@ Removed `fetchPlayerInjuryInfo`, `fetchPlayerSeasonStats` (+ its parsing helpers
 
 ## 7. Two sources of truth to unify
 - ~~League registration split~~ — DONE: `mantraTournamentId` lives in `LEAGUES`; `MANTRA_TOURNAMENT_ID` is derived.
-- `.claude/skills/mantra-auction-picks/scripts/fetch_and_score.py` re-implements `CDN_STAT_CONFIG`, position guessing and bonus tiers from TS. Keep in sync manually or generate one from the other.
+- `.claude/skills/mantra-auction-picks/scripts/fetch_and_score.py` re-implements `CDN_STAT_CONFIG`, position guessing and bonus tiers from TS. Drift is now guarded by `skillParity.test.ts` (goal/clean-sheet bonuses, CDN keys + flags; skipped when `python3` is missing). Position guessing (`guess_native_positions`) is not covered. The goal-bonus rule already drifted once (changed on mantrafootball.org on 01.06.2026) — check https://mantrafootball.org/rules when scoring looks off.
 
 ## 8. Operational risks (not code smell)
 - SWR background refresh in `mongoCache.ts` is a fire-and-forget promise — unreliable on serverless (`.vercel/` exists).

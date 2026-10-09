@@ -86,13 +86,15 @@ Clean sheets add bonus points for defensive players. Used in the scoring algorit
 
 ## Goal bonus
 
-Goals are worth more for players in naturally defensive/creative positions, and less for pure strikers (since goals are their base job). Used in `goalBonus()`:
+Goals are worth more for players in naturally defensive/creative positions, and less for forwards (goals are their base job). The bonus depends on the scorer's **native** positions (any of them), not the slot they played in. Used in `goalBonus()` (`lib/tourScoring.ts`):
 
-| Primary position | Points per goal |
+| Native positions | Points per goal |
 |---|---|
-| ST | +2 |
-| FW | +2.5 |
-| All others (GK, DEF, MID, AM, W) | +3 |
+| ST or FW among them | +2 |
+| AM or W among them (no ST/FW) | +2.5 |
+| none of ST/FW/AM/W (GK, DEF, DM, CM) | +3 |
+
+Source: <https://mantrafootball.org/rules>. **Rule changed on 01.06.2026** — before that FW was +2.5 and AM/W +3; the app was on the old values until this was fixed (re-check the rules page if scores look off).
 
 ---
 
