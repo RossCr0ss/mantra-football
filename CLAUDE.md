@@ -27,7 +27,7 @@ Verification loop: `yarn typecheck` + unit tests + `yarn lint` (`next/core-web-v
 | FotMob endpoints, shapes, quirks | `docs/fotmob-api.md` |
 | mantrafootball.org endpoints | `docs/mantrafootball-api.md` |
 | Cache layers / TTLs | `docs/cache.md` |
-| Tour scoring algorithm | `docs/scoring.md` |
+| Tour scoring algorithm | `docs/scoring.md` (how the weights were fitted / re-fit: `docs/scoring-research.md`) |
 | Mantra positions + formations | `docs/mantra-rules.md` |
 | injured/suspended/availability model | `docs/player-availability.md` |
 | Recipes: new stat / league / feature | `docs/adding-a-feature.md`, `docs/adding-a-league.md` |

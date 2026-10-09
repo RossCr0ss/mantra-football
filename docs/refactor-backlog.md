@@ -7,7 +7,7 @@ Done: split of `lib/fotmob.ts` into `lib/fotmob/*`; vitest + 22 tests. Done in t
 Split into `{types,http,cdnStats,league,teams,players,matches}.ts`; all server HTTP goes through `fotmobFetch` (shared headers, `no-store`, 15 s timeout; covered by `http.test.ts`). `fetchMatchOddsClient` is the only raw `fetch` (relative URL to our own API). Not done: retries (timeouts surface as errors; `withCache` serves stale on failure).
 
 ## 2. Tests — extend (vitest set up, DONE for core pure logic)
-Covered: `tourScoring`, `tourModules`, `nameMatch`, `buildTeamFixtures`. Also covered now: `squadStats`, `availabilitySuggestion`, `mongoCache`, `squadValidation`, `apiUtils`, `clientCache`, `fotmobFetch`, `mantraFootball` (pagination, roster HTML parsing, login). Also `injuries` (override vs live) and `suspensionCheck`. `calcScore` weights are pinned by hand-computed values in `tourScoring.weights.test.ts` (rating, fixture, odds, minutes, form, every position formula, prior-season blend) — all position formulas (GK, DEF, DM, CM, AM/W, FWD winger, ST/FW) are pinned. Not covered: `fixturesCache` Mongo read/write path, `fotmobCache` wrappers, `cdnStats` and the `players.ts` parsers (recent matches, rich stats). `fotmob/{league,teams,matches}` are covered with hand-written fixtures that follow `docs/fotmob-api.md` — refresh them from a live response if FotMob changes shape.
+Covered: `tourScoring`, `tourModules`, `nameMatch`, `buildTeamFixtures`. Also covered now: `squadStats`, `availabilitySuggestion`, `mongoCache`, `squadValidation`, `apiUtils`, `clientCache`, `fotmobFetch`, `mantraFootball` (pagination, roster HTML parsing, login). Also `injuries` (override vs live) and `suspensionCheck`. `calcScore` weights are pinned by a snapshot of `SCORE_WEIGHTS` plus hand-computed expected points per position group, start probability, match context, malus and monotonicity in `tourScoring.weights.test.ts` / `tourScoring.test.ts`. Not covered: `fixturesCache` Mongo read/write path, `fotmobCache` wrappers, `cdnStats` and the `players.ts` parsers (recent matches, rich stats). `fotmob/{league,teams,matches}` are covered with hand-written fixtures that follow `docs/fotmob-api.md` — refresh them from a live response if FotMob changes shape.
 
 ## 3. Lint — DONE
 `apps/web/.eslintrc.json`: `next/core-web-vitals` + `@typescript-eslint/no-restricted-imports` banning server-only modules (`lib/fotmob` runtime, `mongodb`, `injuries`, `suspensionCheck`, caches) in `components/**` and the client pages (analytics/fixtures/tour). Clean now. If you add another client page, add it to the `files` list in the override.
@@ -45,3 +45,14 @@ Removed `fetchPlayerInjuryInfo`, `fetchPlayerSeasonStats` (+ its parsing helpers
 - `favicon.ico` returns 404 (no `public/` by design) — harmless console noise.
 - `.env` still points `MONGODB_URI` at port 27018 while `docker-compose.yml` publishes Mongo on 27028 (see CLAUDE.md) — pass `MONGODB_URI` explicitly or fix `.env`.
 
+## 10. CDN stat extraction (found while fitting the scoring weights, 2026-10-09)
+Verified against per-match FotMob data (Haaland, PL 2025/26: 59 shots on target of 126, 24 fouls, 30 big chances missed, 9 big chances created):
+- `shots` (`ontarget_scoring_att`, `SubStatValue`) is the **shot accuracy %** (46.8), not a count; `StatValue` is shots on target per 90. The Analytics page "Sh" column shows this percentage.
+- `foulsCommitted` (2), `bigChancesMissed` (21.4), `possessionWonFinal3rd` (0.6) are not season totals either — the `useSubStatValue` choice in `CDN_STAT_CONFIG` is wrong for them (probably per-90 rates / percentages).
+- `bigChancesCreated` uses `SubStatValue` (8) while `StatValue` is the total (9).
+- `successfulDribbles`, `aerialsWon`, `dribbledPast`, `highClaims` have no CDN key, so they are always null.
+- The lists are partial (top-N): `cleanSheets` is present for ~30 of 537 PL players, `saves`/`savePercentage`/`goalsPrevented` for ~20; absent = "not listed", read as 0 by `pm()`.
+`calcScore` no longer reads any of the unreliable fields (see `docs/scoring.md`), but the Analytics page still shows them. Fix: verify each key's `StatValue`/`SubStatValue`/per-90 meaning against match data, derive totals (`per90 × minutes / 90`), then invalidate the `fotmob_all_stats` cache.
+
+## 11. Ideas from the weights research
+See "Ideas not done" in `docs/scoring-research.md` — per-player recent matches via the unauthenticated `matchDetails` endpoint (best lever for start probability), expected-value defence bonus, bench model.
