@@ -25,10 +25,8 @@ import {
   fetchLeagueSeasonId,
   fetchLeaguePreviousSeasonId,
   fetchMatchOdds,
-  fetchLeagueStatsList,
   fetchLeagueAllPlayerStats,
   fetchPlayerRecentMatches,
-  fetchPlayerSeasonStats,
   fetchPlayerRichStats,
   fetchPlayerCurrentTeam,
   fetchMatchCardEvents,
@@ -178,21 +176,6 @@ export function getMatchOddsCached(
 
 // ─── Per-player season stats (from playerData endpoint) ──────────────────────
 
-export function getPlayerSeasonStatsCached(
-  playerId: number,
-  opts?: Opts,
-): Promise<Partial<PlayerSeasonStats>> {
-  return withCache(
-    'fotmob_player_stats',
-    { playerId },
-    CACHE_TTL.PLAYERS,
-    () => fetchPlayerSeasonStats(playerId),
-    opts,
-  );
-}
-
-// ─── Player current team (transfer detection) ─────────────────────────────────
-
 export function getPlayerCurrentTeamCached(
   playerId: number,
   opts?: Opts,
@@ -292,30 +275,6 @@ export function getPlayerRichStatsCached(
 }
 
 // ─── League stat lists (single key) ──────────────────────────────────────────
-
-interface StatListEntry { playerId: number; value: number }
-
-export async function getLeagueStatsListCached(
-  leagueId: number,
-  seasonId: string,
-  statKey: string,
-  opts?: Opts & { useSubStatValue?: boolean },
-): Promise<Map<number, number>> {
-  const useSubStatValue = opts?.useSubStatValue ?? false;
-  const rows = await withCache<StatListEntry[]>(
-    'fotmob_stat_list',
-    { leagueId, seasonId, statKey, useSubStatValue },
-    CACHE_TTL.RATINGS,
-    async () => {
-      const map = await fetchLeagueStatsList(leagueId, seasonId, statKey, useSubStatValue);
-      return Array.from(map.entries()).map(([playerId, value]) => ({ playerId, value }));
-    },
-    opts,
-  );
-  return new Map(rows.map(({ playerId, value }) => [playerId, value]));
-}
-
-// ─── All CDN stats for a league (merged, 19 categories in one cache doc) ─────
 
 interface AllStatEntry { playerId: number; stats: Partial<PlayerSeasonStats> }
 

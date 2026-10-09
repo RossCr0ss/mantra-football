@@ -1,4 +1,5 @@
 import { load } from 'cheerio';
+import { LEAGUES } from '@/lib/leagues';
 import type { MantraPosition } from '@/types/squad';
 
 /**
@@ -20,14 +21,10 @@ const HTML_HEADERS = {
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 };
 
-/** Our FotMob LEAGUES id → mantrafootball.org tournament id (stable across seasons). */
-export const MANTRA_TOURNAMENT_ID: Record<number, number> = {
-  47: 2,   // Premier League → England
-  55: 1,   // Serie A → Italy
-  40: 13,  // First Division A → Belgium
-  441: 15, // Ukrainian Premier League → Ukraine
-  87: 5,   // LaLiga → Spain
-};
+/** Our FotMob LEAGUES id → mantrafootball.org tournament id (derived from `LEAGUES[].mantraTournamentId`). */
+export const MANTRA_TOURNAMENT_ID: Record<number, number> = Object.fromEntries(
+  LEAGUES.map((l) => [l.id, l.mantraTournamentId]),
+);
 
 export interface MantraPlayer {
   id: number;

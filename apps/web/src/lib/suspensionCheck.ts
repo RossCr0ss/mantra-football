@@ -1,16 +1,8 @@
 import { getLeagueFixturesCached } from '@/lib/fixturesCache';
 import { getMatchCardEventsCached } from '@/lib/fotmobCache';
+import { YELLOW_CARD_BAN_THRESHOLD } from '@/lib/suspensionRules';
 
-/**
- * Best-effort default: most European domestic leagues ban a player for one
- * match on their 5th accumulated yellow card of the season (Premier League,
- * Serie A, LaLiga all use 5 as the first threshold; exact reset behaviour
- * after that point differs by competition and isn't modelled here).
- * Deliberately NOT used to auto-set `lineupStatus` — surfaced as a warning
- * only, since getting an accumulation-based ban wrong would wrongly benched
- * an available player. A red card is the one case with no such ambiguity.
- */
-export const YELLOW_CARD_BAN_THRESHOLD = 5;
+export { YELLOW_CARD_BAN_THRESHOLD };
 
 /** How many days back a red/second-yellow still counts as "their last match" — roughly one round. */
 const RED_CARD_RECENCY_DAYS = 12;
