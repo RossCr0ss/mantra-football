@@ -14,7 +14,7 @@ Covered: `tourScoring`, `tourModules`, `nameMatch`, `buildTeamFixtures`. Not cov
 
 ## 4. Large client files — mostly DONE
 Moved (pure moves, bundle sizes unchanged): `tour/page.tsx` 1390 → 471, `analytics/page.tsx` 1023 → 431, `TeamSquadView.tsx` 1046 → 660 into `components/{tour,analytics,team}/`. Still open:
-- `TeamSquadView.tsx` main component (~590 lines of one function) and `SquadManager.tsx` (~590, has its own `PlayerCard`/`SquadListItem` — different from `team/PlayerCard`, could share a base card).
+- DONE: `TeamSquadView` 660 → 518 (`InjuryReportSection` extracted), `SquadManager` 594 → 436 (`components/squad/`). Remaining in `TeamSquadView`: ~340 lines of state + async handlers (suspensions, positions sync, form, injuries) — candidates for hooks if it grows again.
 - DONE: the repeated sessionStorage+fetch block is now `fetchJsonCached` (tested). Side effect fixed: tour's Refresh now also sends `?refresh=1`. `fixtures/page.tsx` still fetches uncached by design.
 - `tour/page.tsx` data-loading effects → `useTourData(leagueId)`.
 

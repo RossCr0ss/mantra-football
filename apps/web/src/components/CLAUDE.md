@@ -16,7 +16,8 @@ Odds are fetched lazily per match (click "Odds") — don't fetch N×5 on load.
 ## Feature subfolders
 - `components/tour/` — `PitchView` (formation pitch), `TourCards` (`MainCard`, `SquadRow`, `StatBadge`, `TourSkeleton`), `tourUi.ts` (`scoreTier`, `formatDate`, `GROUP_COLORS`).
 - `components/analytics/` — `AnalyticsCard`, `RadarChart`, `FormWidgets` (`FormDot`/`FormStrip`/`RecentMatchesList`), `AnalyticsParts` (`SummaryCard`/`EmptyState`/`AnalyticsSkeleton`), `analyticsUi.ts` (`SortKey`, radar config, colour helpers).
-- `components/team/PlayerCard.tsx` — `PlayerCard`, `SectionHeader`, `PlayerForm` type (used by `TeamSquadView`).
+- `components/team/` — `PlayerCard`, `SectionHeader`, `PlayerForm` type, `InjuryReportSection` (presentational; state/handlers stay in `TeamSquadView`).
+- `components/squad/` — `SquadCards` (`SquadListItem`, `CatalogPlayerCard` = player picker card in the builder), `SquadSkeletons` (used by `SquadManager`).
 New pieces of a big page go into the matching subfolder, not back into `page.tsx`.
 
 ## Rules

@@ -54,4 +54,4 @@ Verification loop: `yarn typecheck` + unit tests + `yarn lint` (`next/core-web-v
 Defined in `apps/web/src/lib/leagues.ts` (47 Premier League, 55 Serie A, 40 Belgium, 441 Ukraine, 87 LaLiga). Each entry carries its `mantraTournamentId` (`MANTRA_TOURNAMENT_ID` in `lib/mantraFootball.ts` is derived from it). Adding a league = one entry in `leagues.ts` — see `docs/adding-a-league.md`.
 
 ## Known large files (read by range, not whole)
-`components/TeamSquadView.tsx` (~660), `components/SquadManager.tsx` (~590), `lib/fotmobCache.ts` (~300), `app/league/[id]/{tour,analytics}/page.tsx` (~450 each; UI pieces in `components/{tour,analytics,team}/`, tour logic in `lib/tourScoring.ts` + `lib/tourModules.ts`). Refactor backlog: `docs/refactor-backlog.md`.
+`components/TeamSquadView.tsx` (~520), `components/SquadManager.tsx` (~440), `lib/fotmobCache.ts` (~300), `app/league/[id]/{tour,analytics}/page.tsx` (~450 each; UI pieces in `components/{tour,analytics,team}/`, tour logic in `lib/tourScoring.ts` + `lib/tourModules.ts`). Refactor backlog: `docs/refactor-backlog.md`.
