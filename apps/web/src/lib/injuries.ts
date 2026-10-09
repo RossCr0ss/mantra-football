@@ -5,7 +5,18 @@ import type { PlayerInjuryInfo } from './fotmob';
 
 const INJURY_CACHE_COLLECTION = 'fotmob_injuries';
 
-function buildFromOverride(override: Record<string, unknown>): PlayerInjuryInfo {
+/** A manual DB override → injury info. `cleared` means "manually healed" and suppresses live FotMob data. */
+function overrideToInfo(override: Record<string, unknown>): PlayerInjuryInfo {
+  if (override.cleared) {
+    return {
+      name: 'Manually healed',
+      expectedReturn: null,
+      expectedReturnDate: null,
+      lastUpdated: (override.lastUpdated as string) ?? null,
+      overridden: true,
+      cleared: true,
+    };
+  }
   return {
     name: override.name as string,
     expectedReturn: (override.expectedReturn as string) ?? null,
@@ -14,6 +25,9 @@ function buildFromOverride(override: Record<string, unknown>): PlayerInjuryInfo 
     overridden: true,
   };
 }
+
+/** FotMob's team endpoint only exposes an `injured` boolean — no details. */
+const LIVE_INJURY: PlayerInjuryInfo = { name: 'Injured', expectedReturn: null, expectedReturnDate: null, lastUpdated: null };
 
 async function injuryFromTeamData(
   playerId: number,
@@ -24,7 +38,7 @@ async function injuryFromTeamData(
     const players = await getTeamPlayersCached(teamId, teamName);
     const player = players.find((p) => p.id === playerId);
     if (!player?.injured) return null;
-    return { name: 'Injured', expectedReturn: null, expectedReturnDate: null, lastUpdated: null };
+    return { ...LIVE_INJURY };
   } catch {
     return null;
   }
@@ -52,19 +66,7 @@ export async function getPlayerInjury(playerId: number): Promise<PlayerInjuryInf
   const db = await getDb();
   const override = await db.collection('player_injuries').findOne({ playerId });
 
-  if (override) {
-    if (override.cleared) {
-      return {
-        name: 'Manually healed',
-        expectedReturn: null,
-        expectedReturnDate: null,
-        lastUpdated: override.lastUpdated as string ?? null,
-        overridden: true,
-        cleared: true,
-      };
-    }
-    return buildFromOverride(override as Record<string, unknown>);
-  }
+  if (override) return overrideToInfo(override as Record<string, unknown>);
 
   const team = await findPlayerTeam(playerId);
   if (!team) return null;
@@ -117,21 +119,10 @@ export async function getPlayerInjuriesBatch(
   for (const p of players) {
     const override = overrideMap.get(p.id);
     if (override) {
-      result[p.id] = override.cleared
-        ? {
-            name: 'Manually healed',
-            expectedReturn: null,
-            expectedReturnDate: null,
-            lastUpdated: override.lastUpdated as string ?? null,
-            overridden: true,
-            cleared: true,
-          }
-        : buildFromOverride(override as Record<string, unknown>);
+      result[p.id] = overrideToInfo(override as Record<string, unknown>);
     } else {
       const injured = teamInjuredSets.get(p.teamId)?.has(p.id) ?? false;
-      result[p.id] = injured
-        ? { name: 'Injured', expectedReturn: null, expectedReturnDate: null, lastUpdated: null }
-        : null;
+      result[p.id] = injured ? { ...LIVE_INJURY } : null;
     }
   }
 
