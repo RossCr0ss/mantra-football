@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { LEAGUES, fetchMatchOddsClient } from '@/lib/fotmob';
+import { fetchMatchOddsClient } from '@/lib/fotmob/matches';
+import { DIFFICULTY_STYLE } from '@/lib/fixtureDifficulty';
+import { LEAGUES } from '@/lib/leagues';
 import Breadcrumbs from '@/components/Breadcrumbs';
 import LeagueNav from '@/components/LeagueNav';
 import { ProgressBar } from '@/components/LoadingProgressBar';
@@ -12,14 +14,6 @@ import type { TeamFixture, FixtureOdds } from '@/lib/fotmob';
 import type { SquadPlayer } from '@/types/squad';
 
 // ─── Difficulty ───────────────────────────────────────────────────────────────
-
-const DIFFICULTY_STYLE: Record<number, { bg: string; text: string; label: string }> = {
-  1: { bg: 'bg-red-600',    text: 'text-red-100',    label: 'Very Hard' },
-  2: { bg: 'bg-orange-500', text: 'text-orange-950', label: 'Hard'      },
-  3: { bg: 'bg-yellow-500', text: 'text-yellow-950', label: 'Medium'    },
-  4: { bg: 'bg-green-500',  text: 'text-green-950',  label: 'Easy'      },
-  5: { bg: 'bg-green-700',  text: 'text-green-100',  label: 'Very Easy' },
-};
 
 function diffStyle(d: number | null) {
   if (d === null) return { bg: 'bg-gray-700', text: 'text-gray-300', label: '?' };

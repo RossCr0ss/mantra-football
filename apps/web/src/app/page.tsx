@@ -1,5 +1,5 @@
 import LeagueCard from '@/components/LeagueCard';
-import { LEAGUES } from '@/lib/fotmob';
+import { LEAGUES } from '@/lib/leagues';
 
 export default function HomePage() {
   return (

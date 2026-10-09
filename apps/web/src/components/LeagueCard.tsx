@@ -1,6 +1,6 @@
 import Image from 'next/image';
 import Link from 'next/link';
-import type { FotMobLeague } from '@/lib/fotmob';
+import type { FotMobLeague } from '@/lib/leagues';
 
 const FLAG_EMOJIS: Record<string, string> = {
   'GB-ENG': '🏴󠁧󠁢󠁥󠁮󠁧󠁿',

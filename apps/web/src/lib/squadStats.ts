@@ -68,7 +68,7 @@ export async function getSquadSeasonStats(
 
 /**
  * Previous-completed-season stats for a squad — used only as an early-season
- * scoring fallback (see calcScore in tour/page.tsx), never shown as this
+ * scoring fallback (see calcScore in lib/tourScoring.ts), never shown as this
  * season's numbers. Unlike getSquadSeasonStats this skips the team-endpoint
  * call entirely (it only ever reflects the *current* season, not an override),
  * so it's sourced purely from the two season-parameterized endpoints: rating.json

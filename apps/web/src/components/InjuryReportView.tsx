@@ -3,26 +3,14 @@
 import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import type { SquadPlayer, LineupStatus } from '@/types/squad';
+import type { SquadPlayer } from '@/types/squad';
+import { isReturningToday } from '@/lib/injuryDate';
 import type { PlayerInjuryInfo } from '@/lib/fotmob';
 
 interface Props {
   leagueId: number;
   initialPlayers: SquadPlayer[];
   initialInjuries: Record<number, PlayerInjuryInfo>;
-}
-
-function isToday(info: PlayerInjuryInfo): boolean {
-  const dateStr = info.expectedReturnDate ?? info.expectedReturn;
-  if (!dateStr) return false;
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return false;
-  const today = new Date();
-  return (
-    d.getFullYear() === today.getFullYear() &&
-    d.getMonth() === today.getMonth() &&
-    d.getDate() === today.getDate()
-  );
 }
 
 export default function InjuryReportView({ leagueId, initialPlayers, initialInjuries }: Props) {
@@ -153,7 +141,7 @@ export default function InjuryReportView({ leagueId, initialPlayers, initialInju
         <Section title="Injured" count={injuredPlayers.length} accent="border-red-500/20">
           {injuredPlayers.map((player) => {
             const info = injuries[player.id];
-            const returning = info ? isToday(info) : false;
+            const returning = info ? isReturningToday(info) : false;
             const isManual = !info && player.lineupStatus === 'injured';
 
             return (

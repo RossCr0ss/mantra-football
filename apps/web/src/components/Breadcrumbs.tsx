@@ -4,7 +4,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useParams, useRouter } from 'next/navigation';
 import { useRef, useState, useEffect } from 'react';
-import { LEAGUES } from '@/lib/fotmob';
+import { LEAGUES } from '@/lib/leagues';
 
 const PAGE_LABELS: Record<string, string> = {
   team:      'My Team',

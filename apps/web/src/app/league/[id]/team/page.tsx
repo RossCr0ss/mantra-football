@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import Link from 'next/link';
 import Image from 'next/image';
 import { notFound } from 'next/navigation';
-import { LEAGUES } from '@/lib/fotmob';
+import { LEAGUES } from '@/lib/leagues';
 import type { PlayerInjuryInfo } from '@/lib/fotmob';
 import { getPlayerInjuriesBatch } from '@/lib/injuries';
 import { getPlayerFormCached } from '@/lib/fotmobCache';
@@ -11,22 +11,17 @@ import { suggestAvailabilityPct, summarizeRecentForm } from '@/lib/availabilityS
 import { getSquadSeasonStats } from '@/lib/squadStats';
 import { getLeagueSuspensionInfo, type PlayerSuspensionInfo } from '@/lib/suspensionCheck';
 import { getDb } from '@/lib/mongodb';
-import TeamSquadView, { type PlayerForm } from '@/components/TeamSquadView';
+import { POSITION_SECTIONS } from '@/lib/positionGroups';
+import TeamSquadView from '@/components/TeamSquadView';
+import type { PlayerForm } from '@/components/team/PlayerCard';
 import Breadcrumbs from '@/components/Breadcrumbs';
 import LeagueNav from '@/components/LeagueNav';
-import type { Squad, SquadPlayer, PositionGroup } from '@/types/squad';
+import type { Squad, SquadPlayer } from '@/types/squad';
 import type { PlayerSeasonStats } from '@/lib/fotmob';
 
 interface Props {
   params: { id: string };
 }
-
-const POSITION_SECTIONS: { group: PositionGroup; label: string }[] = [
-  { group: 'GK',  label: 'Goalkeepers' },
-  { group: 'DEF', label: 'Defenders'   },
-  { group: 'MID', label: 'Midfielders' },
-  { group: 'FWD', label: 'Forwards'    },
-];
 
 
 export default async function TeamPage({ params }: Props) {

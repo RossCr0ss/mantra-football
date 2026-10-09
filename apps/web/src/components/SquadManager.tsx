@@ -4,25 +4,14 @@ import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import type { FotMobTeam, FotMobPlayer, PlayerInjuryInfo } from '@/lib/fotmob';
+import { isReturningToday } from '@/lib/injuryDate';
 import type { SquadPlayer } from '@/types/squad';
 import { SQUAD_RULES } from '@/types/squad';
 import { useSquadStore } from '@/store/squadStore';
 import { guessMantraPositions } from '@/lib/mantraPositions';
+import { POSITION_ORDER } from '@/lib/positionGroups';
 import { matchMantraPlayer } from '@/lib/nameMatch';
 import type { MantraPlayer } from '@/lib/mantraFootball';
-
-function isInjuryToday(info: PlayerInjuryInfo): boolean {
-  const dateStr = info.expectedReturnDate ?? info.expectedReturn;
-  if (!dateStr) return false;
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return false;
-  const today = new Date();
-  return (
-    d.getFullYear() === today.getFullYear() &&
-    d.getMonth() === today.getMonth() &&
-    d.getDate() === today.getDate()
-  );
-}
 
 type Position = 'GK' | 'DEF' | 'MID' | 'FWD';
 const POSITIONS: Position[] = ['GK', 'DEF', 'MID', 'FWD'];
@@ -33,7 +22,6 @@ const POSITION_LABELS: Record<Position, string> = {
   FWD: 'Forwards',
 };
 const PAGE_SIZE = 12;
-const POSITION_ORDER: Record<string, number> = { GK: 0, DEF: 1, MID: 2, FWD: 3 };
 
 function validateSquad(squad: SquadPlayer[]): string | null {
   if (squad.length !== SQUAD_RULES.total) {
@@ -196,11 +184,16 @@ export default function SquadManager({ leagueId, initialPlayers }: Props) {
     if (error) { setValidationError(error); return; }
     setSaving(true);
     try {
-      await fetch('/api/squad', {
+      const res = await fetch('/api/squad', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ leagueId, players: squad }),
       });
+      if (!res.ok) {
+        const { error: msg } = await res.json().catch(() => ({ error: null }));
+        setValidationError(msg ?? 'Failed to save squad.');
+        return;
+      }
       router.refresh();
       router.push(`/league/${leagueId}/team`);
     } finally {
@@ -470,7 +463,7 @@ function SquadListItem({ player, onRemove }: { player: SquadPlayer; onRemove: ()
         {player.injured && (
           <p className="mt-0.5 text-xs font-semibold text-red-400">
             {injury ? injury.name : 'Injured'}
-            {injury && isInjuryToday(injury) ? (
+            {injury && isReturningToday(injury) ? (
               <span className="ml-1 font-semibold text-green-400">· Returns today!</span>
             ) : injury?.expectedReturn ? (
               <span className="ml-1 font-normal text-red-300/60">· {injury.expectedReturn}</span>
@@ -540,7 +533,7 @@ function PlayerCard({
               <p className="text-xs font-semibold text-red-400">
                 {injury ? injury.name : 'Injured'}
               </p>
-              {injury && isInjuryToday(injury) ? (
+              {injury && isReturningToday(injury) ? (
                 <p className="text-xs font-semibold text-green-400">Returns today!</p>
               ) : injury?.expectedReturn ? (
                 <p className="text-xs text-red-300/60">Return: {injury.expectedReturn}</p>

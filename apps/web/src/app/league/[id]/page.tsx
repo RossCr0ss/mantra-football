@@ -2,7 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import Image from 'next/image';
 import { notFound, redirect } from 'next/navigation';
-import { LEAGUES } from '@/lib/fotmob';
+import { LEAGUES } from '@/lib/leagues';
 import Breadcrumbs from '@/components/Breadcrumbs';
 import { getDb } from '@/lib/mongodb';
 import SquadManager from '@/components/SquadManager';
