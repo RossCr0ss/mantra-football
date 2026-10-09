@@ -328,7 +328,7 @@ The breakdown is display-only — `autoSelect()` uses `total` only.
 
 ## Tuning the weights
 
-If auto-select consistently produces poor picks, adjust these constants in `calcScore()`:
+If auto-select consistently produces poor picks, adjust these constants in `calcScore()` (`lib/tourScoring.ts`). `tourScoring.weights.test.ts` pins the documented values — changing a weight on purpose means updating this doc and those expected numbers together:
 
 | Parameter | Default | Effect if increased |
 |---|---|---|
