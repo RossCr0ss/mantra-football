@@ -135,12 +135,12 @@ The malus is subtracted from the FotMob match rating only. Goals, assists, and c
 
 `assignModule()` uses a **constrained-slot-first** strategy to avoid deadlocks and minimise out-of-position play:
 
-1. Find the slot with the **fewest eligible remaining players** (most constrained).
+1. Find the slot with the **fewest native candidates** (ties: fewest eligible players) — the most constrained.
 2. If **native players** (malus = 0) exist for that slot: assign the highest-scoring one. Out-of-position players are **never used** when a native option is available.
 3. Only if **no native player remains**: assign the best out-of-position compatible player.
 4. Mark that player as used and repeat.
 
-When comparing formations, the algorithm **always prefers a formation with zero out-of-position slots** over one that requires any OOP assignment, regardless of score. Score is only a tiebreaker among formations with equal OOP counts.
+When comparing formations, the algorithm picks the one with the **highest total effective score**; out-of-position players already lose rating points through the malus, so no separate OOP counting is needed (see `docs/scoring.md`, Step 2).
 
 This ensures, for example, that the only RB in the squad is used as RB rather than accidentally consumed by a WB/RB slot when filling WB first.
 

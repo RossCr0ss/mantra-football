@@ -133,7 +133,7 @@ On the pitch view (tour page) the emblem appears as a small badge overlaid on th
 
 ### Pitch view sizing
 
-The tactics view in `tour/page.tsx` uses `max-w-sm sm:max-w-xl md:max-w-2xl` so the pitch scales up on wider screens while staying readable on mobile. Player token sizes are:
+The tactics view (`components/tour/PitchView.tsx`) uses `max-w-sm sm:max-w-xl md:max-w-2xl` so the pitch scales up on wider screens while staying readable on mobile. Player token sizes are:
 - GK avatar: `h-12 w-12`
 - Outfield avatar: `h-11 w-11`
 - Score chip: `text-[9px]`

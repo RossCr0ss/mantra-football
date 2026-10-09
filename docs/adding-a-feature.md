@@ -43,7 +43,7 @@ In `apps/web/src/app/league/[id]/analytics/page.tsx`:
 
 ### Step 4 — Use in tour scoring (optional)
 
-If the stat should influence auto-select, update `calcScore()` in `apps/web/src/app/league/[id]/tour/page.tsx`.
+If the stat should influence auto-select, update `calcScore()` in `apps/web/src/lib/tourScoring.ts` (and extend `tourScoring.test.ts`).
 
 ---
 
@@ -105,7 +105,7 @@ When building any UI that lists players, follow these conventions:
 
 ## Changing the scoring algorithm
 
-The entire scoring logic is in `calcScore()` in `apps/web/src/app/league/[id]/tour/page.tsx`.
+The entire scoring logic is in `calcScore()` in `apps/web/src/lib/tourScoring.ts`.
 
 - `ScoreBreakdown` interface defines what's tracked per component
 - `scoreTier()` controls the display colour thresholds
