@@ -1,16 +1,16 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { LEAGUES } from '@/lib/fotmob';
+import { parseLeagueParam, apiError } from '@/lib/apiUtils';
 import type { TeamFixture } from '@/lib/fotmob';
 import { getLeagueFixturesCached, buildTeamFixtures } from '@/lib/fixturesCache';
 import { getDb } from '@/lib/mongodb';
 import type { Squad } from '@/types/squad';
 
 export async function GET(req: Request, { params }: { params: { id: string } }) {
-  const leagueId = Number(params.id);
-  const league = LEAGUES.find((l) => l.id === leagueId);
-  if (!league) return NextResponse.json({ error: 'League not found' }, { status: 404 });
+  const league = parseLeagueParam(params.id);
+  if (!league) return apiError('League not found', 404);
+  const leagueId = league.id;
 
   const forceRefresh = new URL(req.url).searchParams.get('refresh') === '1';
 

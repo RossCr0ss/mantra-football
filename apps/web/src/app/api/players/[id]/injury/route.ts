@@ -1,25 +1,22 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
+import { parseIdParam, apiError } from '@/lib/apiUtils';
 import { getDb } from '@/lib/mongodb';
 import { getPlayerInjury, fetchPlayerInjuryFresh, evictInjuryCache } from '@/lib/injuries';
 import type { PlayerInjuryInfo } from '@/lib/fotmob';
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const playerId = parseInt(params.id, 10);
-  if (isNaN(playerId)) {
-    return NextResponse.json({ error: 'Invalid player id' }, { status: 400 });
-  }
+  const playerId = parseIdParam(params.id);
+  if (playerId === null) return apiError('Invalid player id');
 
   const injury = await getPlayerInjury(playerId);
   return NextResponse.json({ injury });
 }
 
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
-  const playerId = parseInt(params.id, 10);
-  if (isNaN(playerId)) {
-    return NextResponse.json({ error: 'Invalid player id' }, { status: 400 });
-  }
+  const playerId = parseIdParam(params.id);
+  if (playerId === null) return apiError('Invalid player id');
 
   const body = await req.json() as {
     name?: string;
@@ -85,10 +82,8 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
  * Returns the fresh FotMob injury (or null if FotMob shows no injury).
  */
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  const playerId = parseInt(params.id, 10);
-  if (isNaN(playerId)) {
-    return NextResponse.json({ error: 'Invalid player id' }, { status: 400 });
-  }
+  const playerId = parseIdParam(params.id);
+  if (playerId === null) return apiError('Invalid player id');
 
   const db = await getDb();
   await db.collection('player_injuries').deleteOne({ playerId });

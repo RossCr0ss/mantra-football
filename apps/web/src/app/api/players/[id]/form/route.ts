@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { parseIdParam, apiError } from '@/lib/apiUtils';
 import { getPlayerFormCached } from '@/lib/fotmobCache';
 import { suggestAvailabilityPct, summarizeRecentForm } from '@/lib/availabilitySuggestion';
 import type { PositionGroup } from '@/types/squad';
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const playerId = parseInt(params.id, 10);
-  if (isNaN(playerId)) return NextResponse.json({ error: 'Invalid player id' }, { status: 400 });
+  const playerId = parseIdParam(params.id);
+  if (playerId === null) return apiError('Invalid player id');
 
   const positionGroup = (req.nextUrl.searchParams.get('positionGroup') ?? 'MID') as PositionGroup;
 

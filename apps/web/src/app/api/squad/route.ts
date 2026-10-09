@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
+import { findLeague, parseIdParam, apiError } from '@/lib/apiUtils';
+import { MANTRA_POSITIONS } from '@/lib/mantraPositions';
+import { validateSquadPayload } from '@/lib/squadValidation';
 import type { Squad, SquadPlayer, MantraPosition, LineupStatus } from '@/types/squad';
 
+const VALID_POSITIONS = new Set<string>(MANTRA_POSITIONS.map((p) => p.code));
+
+/** Parses the JSON body, or null when it is missing/malformed. */
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try { return (await req.json()) as T; } catch { return null; }
+}
+
 export async function GET(req: NextRequest) {
-  const leagueId = Number(req.nextUrl.searchParams.get('leagueId'));
-  if (!leagueId) {
-    return NextResponse.json({ error: 'leagueId required' }, { status: 400 });
-  }
+  const league = findLeague(parseIdParam(req.nextUrl.searchParams.get('leagueId')));
+  if (!league) return apiError('Valid leagueId required');
+  const leagueId = league.id;
 
   const db = await getDb();
   const squad = await db.collection<Squad>('squads').findOne({ leagueId });
@@ -14,12 +23,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json() as { leagueId: number; players: SquadPlayer[] };
-  const { leagueId, players } = body;
-
-  if (!leagueId || !Array.isArray(players)) {
-    return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });
-  }
+  const body = await readJson<{ leagueId: number; players: SquadPlayer[] }>(req);
+  if (!body || !findLeague(body.leagueId) || !Array.isArray(body.players)) return apiError('Invalid payload');
+  const leagueId = body.leagueId;
+  const validated = validateSquadPayload(body.players);
+  if ('error' in validated) return apiError(validated.error);
+  const players = validated.players;
 
   const db = await getDb();
   await db.collection<Squad>('squads').updateOne(
@@ -32,7 +41,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const body = await req.json() as {
+  const body = await readJson<{
     leagueId: number;
     playerId: number;
     mantraPositions?: MantraPosition[];
@@ -42,24 +51,26 @@ export async function PATCH(req: NextRequest) {
     lineupStatusSource?: 'manual' | 'auto';
     teamId?: number;
     teamName?: string;
-  };
+  }>(req);
+  if (!body) return apiError('Invalid payload');
   const {
     leagueId, playerId, mantraPositions, lineupStatus, availabilityPct, availabilityPctSource,
     lineupStatusSource, teamId, teamName,
   } = body;
 
-  if (!leagueId || !playerId) {
-    return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });
-  }
+  if (!findLeague(leagueId) || !playerId) return apiError('Invalid payload');
 
   const $set: Record<string, unknown> = { updatedAt: new Date().toISOString() };
   if (mantraPositions !== undefined) {
-    if (!Array.isArray(mantraPositions)) {
-      return NextResponse.json({ error: 'Invalid mantraPositions' }, { status: 400 });
+    if (!Array.isArray(mantraPositions) || mantraPositions.some((m) => !VALID_POSITIONS.has(m))) {
+      return apiError('Invalid mantraPositions');
     }
     $set['players.$.mantraPositions'] = mantraPositions;
   }
   if (lineupStatus !== undefined) {
+    if (lineupStatus !== null && lineupStatus !== 'injured' && lineupStatus !== 'suspended') {
+      return apiError('Invalid lineupStatus');
+    }
     $set['players.$.lineupStatus'] = lineupStatus ?? null;
   }
   if (lineupStatusSource !== undefined) {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { parseLeagueParam, apiError } from '@/lib/apiUtils';
 import { fetchMantraTeamRoster, MANTRA_TOURNAMENT_ID } from '@/lib/mantraFootball';
 import { getMantraTournamentPlayersCached } from '@/lib/mantraFootballCache';
 import {
@@ -8,8 +9,9 @@ import { matchMantraPlayer, clubSimilarity, type MatchCandidate } from '@/lib/na
 import type { SquadPlayer, MantraPosition } from '@/types/squad';
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const leagueId = Number(params.id);
-  if (!leagueId) return NextResponse.json({ error: 'Invalid leagueId' }, { status: 400 });
+  const league = parseLeagueParam(params.id);
+  if (!league) return apiError('League not found', 404);
+  const leagueId = league.id;
 
   const sessionCookie = req.cookies.get('mantra_session')?.value;
   if (!sessionCookie) {
