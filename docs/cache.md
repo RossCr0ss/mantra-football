@@ -24,7 +24,7 @@ MongoDB is already running for squad persistence. Adding Redis would increase in
 | `> staleMs` or no doc | Synchronous fetch, store, serve |
 | Fetch fails and a stale doc exists | Serve stale (graceful degradation) |
 
-`forceRefresh: true` skips all checks (UI "Refresh" button, `?refresh=1`). An empty-array doc is always treated as a miss (legacy Ukrainian-squad bug).
+`forceRefresh: true` (UI "Refresh" button, `?refresh=1`) skips the TTL checks but is **throttled**: if the doc was cached less than `MIN_FORCE_REFRESH_MS` (30 s) ago the cached data is served, so refresh spam can't hammer FotMob. An empty-array doc is always treated as a miss (legacy Ukrainian-squad bug).
 
 **TTL values are defined only in `CACHE_TTL` in `apps/web/src/lib/mongoCache.ts` — read the code, they are not repeated here** (keys: `TEAMS`, `PLAYERS`, `RATINGS`, `ODDS`, `SEASON`, `FIXTURES`, `INJURIES`, `MANTRA_POSITIONS`, `PLAYER_TEAM`, `MATCH_CARDS`). Utilities: `deleteCache`, `getCachedAt` (for "last updated" UI).
 

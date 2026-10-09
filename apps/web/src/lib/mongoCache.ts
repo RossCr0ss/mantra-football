@@ -53,6 +53,12 @@ interface CacheDoc<T> {
   [key: string]: unknown;
 }
 
+/**
+ * A forced refresh is ignored (cached data served) when the doc was refreshed less than this ago —
+ * stops `?refresh=1` spam from hammering FotMob. Short enough that the UI Refresh button still feels live.
+ */
+export const MIN_FORCE_REFRESH_MS = 30_000;
+
 /** Deduplicates in-progress background refreshes so only one runs per key. */
 const backgroundRefreshes = new Map<string, Promise<void>>();
 
@@ -70,8 +76,8 @@ function docKey(collection: string, filter: Record<string, unknown>): string {
  * | > staleMs  or  no doc     | Synchronous fetch, then store & serve   |
  * | Fetch fails + stale exists| Return stale (graceful degradation)     |
  *
- * Pass `forceRefresh: true` to skip TTL checks entirely and always fetch fresh
- * (used when the user explicitly hits the Refresh button in the UI).
+ * Pass `forceRefresh: true` to skip TTL checks and fetch fresh (used when the user explicitly hits
+ * the Refresh button in the UI) — unless the doc is younger than MIN_FORCE_REFRESH_MS.
  */
 export async function withCache<T>(
   collection: string,
@@ -86,34 +92,34 @@ export async function withCache<T>(
   const isEmptyArr = (d: CacheDoc<T> | null) =>
     Array.isArray(d?.data) && (d!.data as unknown[]).length === 0;
 
-  if (!forceRefresh) {
-    const cached = await col.findOne(filter as Parameters<typeof col.findOne>[0]);
+  const cached = await col.findOne(filter as Parameters<typeof col.findOne>[0]);
 
-    if (cached && !isEmptyArr(cached)) {
-      const ageMs = Date.now() - cached.cachedAt.getTime();
+  if (cached && !isEmptyArr(cached)) {
+    const ageMs = Date.now() - cached.cachedAt.getTime();
 
-      if (ageMs < ttl.freshMs) {
-        return cached.data;
+    if (forceRefresh) {
+      if (ageMs < MIN_FORCE_REFRESH_MS) return cached.data;
+    } else if (ageMs < ttl.freshMs) {
+      return cached.data;
+    }
+
+    if (!forceRefresh && ageMs < ttl.staleMs) {
+      // Stale-while-revalidate: respond instantly, refresh silently in background
+      const key = docKey(collection, filter);
+      if (!backgroundRefreshes.has(key)) {
+        const p: Promise<void> = fetcher()
+          .then((data) =>
+            col.updateOne(
+              filter as Parameters<typeof col.updateOne>[0],
+              { $set: { ...filter, data, cachedAt: new Date() } },
+              { upsert: true },
+            ).then(() => undefined),
+          )
+          .catch(() => undefined)
+          .finally(() => backgroundRefreshes.delete(key));
+        backgroundRefreshes.set(key, p);
       }
-
-      if (ageMs < ttl.staleMs) {
-        // Stale-while-revalidate: respond instantly, refresh silently in background
-        const key = docKey(collection, filter);
-        if (!backgroundRefreshes.has(key)) {
-          const p: Promise<void> = fetcher()
-            .then((data) =>
-              col.updateOne(
-                filter as Parameters<typeof col.updateOne>[0],
-                { $set: { ...filter, data, cachedAt: new Date() } },
-                { upsert: true },
-              ).then(() => undefined),
-            )
-            .catch(() => undefined)
-            .finally(() => backgroundRefreshes.delete(key));
-          backgroundRefreshes.set(key, p);
-        }
-        return cached.data;
-      }
+      return cached.data;
     }
   }
 

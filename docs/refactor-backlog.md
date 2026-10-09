@@ -19,7 +19,7 @@ Moved (pure moves, bundle sizes unchanged): `tour/page.tsx` 1390 → 471, `analy
 - `tour/page.tsx` data-loading effects → `useTourData(leagueId)`.
 
 ## 5. API route hygiene — DONE
-`lib/apiUtils.ts` (`parseIdParam`, `findLeague`, `parseLeagueParam`, `apiError`) is used by every route; `/api/squad` now validates league, squad size (≤26), `lineupStatus` and `mantraPositions` values. Still open: full `SquadPlayer` shape validation on POST, and a rate/size limit on `/api/leagues/[id]/analytics` body-less refresh (`?refresh=1` is unauthenticated).
+`lib/apiUtils.ts` (`parseIdParam`, `findLeague`, `parseLeagueParam`, `apiError`) is used by every route; `/api/squad` now validates league, squad size (≤26), `lineupStatus` and `mantraPositions` values. `SquadPlayer` shape/size validation on POST is in `lib/squadValidation.ts`; `?refresh=1` is throttled in `withCache` (30 s per cache doc). There is still no authentication anywhere (single-user app).
 
 ## 6. Dead exports — DONE
 Removed `fetchPlayerInjuryInfo`, `fetchPlayerSeasonStats` (+ its parsing helpers), `getPlayerSeasonStatsCached`, `getLeagueStatsListCached` (`fotmob/players.ts` 530 → 286 lines). `noUnusedLocals` is now on in `tsconfig.json`, so new leftovers fail `typecheck`.
