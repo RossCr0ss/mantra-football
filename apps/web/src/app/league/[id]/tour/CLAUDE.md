@@ -10,6 +10,10 @@ Page: `page.tsx` (UI + data loading only). Logic lives in `lib/`:
 - `lineupStatus` `injured|suspended` → excluded from auto-select. The page also overlays **live injuries** (`lib/liveInjuries.ts`: active, non-healed injury ⇒ virtual `injured`, source `auto`) — see `docs/player-availability.md`; `availabilityPct` multiplies the final score (0 → never selected).
 - Out-of-position slots lose `malus × 15 × startProb` score units (`POSITION_MALUS`, −1.5 / −3; linear, like the real game).
 
+## Auto-select timing and logging
+- The first auto-select waits until `players` are enriched with the **final odds** (`playersReady`: odds loaded in the same batch as `oddsMap`). Before, it ran on the table-difficulty fallback, which the backtest shows is clearly worse.
+- Each auto-select without a pinned formation POSTs a snapshot (`buildTourLogEntry`, `lib/tourLog.ts`) to `/api/leagues/[id]/tour-log` (one document per league + round, the last one wins).
+
 ## Fixture difficulty (fallback only)
 `buildTeamFixtures` (`lib/fixturesCache.ts`): `difficulty = clamp(ceil(opponentTablePos / totalTeams * 5), 1, 5)`. Top opponent → **1 = hardest (red)**, bottom → **5 = easiest (dark green)**. Styles in `lib/fixtureDifficulty.ts`. `calcScore` uses the 1X2 odds; difficulty only supplies the win/opponent-win probabilities when odds are missing.
 

@@ -17,6 +17,7 @@ Route handlers are thin: parse id → call a `*Cached` function (`lib/fotmobCach
 | `/api/mantra-auth/login` | GET / POST / DELETE | auth status / log in (sets httpOnly `mantra_session`, 12 h) / log out |
 | `/api/teams/[id]/players` | GET | Team squad (`?teamName=` required) |
 | `/api/matches/[id]/odds` | GET | 1×2 odds (cached) |
+| `/api/leagues/[id]/tour-log` | GET / POST | stored tour recommendations (`?round=`) / upsert the engine's recommendation for (league, round) — written by the tour page after the first auto-select with final odds (`tour_logs`) |
 | `/api/squad` | GET / POST / PATCH | read (`?leagueId=`) / replace / update one player's `mantraPositions`, `lineupStatus`, `availabilityPct` |
 | `/api/players/[id]/injury` | GET / PUT / DELETE | injury info (DB override → FotMob) / manual override (`{cleared:true}` = healed) / delete override |
 | `/api/players/[id]/stats` | GET | Rich stats w/ percentiles (needs `FOTMOB_COOKIE`) |

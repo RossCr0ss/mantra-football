@@ -15,6 +15,7 @@ import type { PlayerRecentMatch } from '@/lib/fotmob';
 import { POSITION_ORDER, POSITION_SECTIONS, effectivePositionGroup } from '@/lib/positionGroups';
 import { MODULES, effectiveScore, enrichPlayers, pickBestModule, type EnrichedPlayer } from '@/lib/tourModules';
 import { isBlocked } from '@/lib/tourScoring';
+import { buildTourLogEntry } from '@/lib/tourLog';
 import { applyLiveInjuries } from '@/lib/liveInjuries';
 import { fetchJsonCached, CACHE_KEY } from '@/lib/clientCache';
 import { PitchView } from '@/components/tour/PitchView';
@@ -27,7 +28,9 @@ export default function TourPage() {
 
   const [players, setPlayers] = useState<EnrichedPlayer[]>([]);
   const [loadingMain, setLoadingMain] = useState(true);
-  const [, setLoadingOdds] = useState(false);
+  const [loadingOdds, setLoadingOdds] = useState(false);
+  /** True once `players` were enriched with the final odds — the first auto-select waits for it (otherwise it runs on the weak table-difficulty fallback). */
+  const [playersReady, setPlayersReady] = useState(false);
   const [mainIds, setMainIds] = useState<Set<number>>(new Set());
   const [selectedModule, setSelectedModule] = useState<string | null>(null);
   const [appliedModule, setAppliedModule] = useState<string | null>(null);
@@ -53,15 +56,16 @@ export default function TourPage() {
   useEffect(() => {
     if (squad.length === 0) return;
     setPlayers(enrichPlayers(squad, fixtures, analyticsMap, oddsMap, formMap));
-  }, [squad, fixtures, analyticsMap, oddsMap, formMap]);
+    setPlayersReady(!loadingOdds);
+  }, [squad, fixtures, analyticsMap, oddsMap, formMap, loadingOdds]);
 
   // Auto-select once when players first load
   useEffect(() => {
-    if (players.length === 0 || autoSelectedRef.current) return;
+    if (players.length === 0 || !playersReady || autoSelectedRef.current) return;
     autoSelectedRef.current = true;
     autoSelect();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [players]);
+  }, [players, playersReady]);
 
   // Re-run auto-select when formation chip changes (only after initial load)
   useEffect(() => {
@@ -113,8 +117,11 @@ export default function TourPage() {
               .then((d) => [id, (d.odds as FixtureOdds | null)] as const)
               .catch(() => [id, null] as const),
           ),
-        ).then((entries) => setOddsMap(new Map(entries)))
-          .finally(() => setLoadingOdds(false));
+        ).then((entries) => {
+          // one batch: odds and "not loading" reach the enrich effect together
+          setOddsMap(new Map(entries));
+          setLoadingOdds(false);
+        });
       }
 
       fetchJsonCached<{ form?: Record<string, PlayerRecentMatch[]> }>(
@@ -136,6 +143,16 @@ export default function TourPage() {
     // plus the team defence bonus (see pickBestModule in lib/tourModules.ts).
     const best = pickBestModule(available, selectedModule);
     if (!best) return;
+
+    // Keep the engine's own recommendation (not a pinned formation) for later backtests against real results.
+    const round = players.find((p) => p.nextFixture?.round)?.nextFixture?.round;
+    if (selectedModule === null && round && !loadingOdds) {
+      void fetch(`/api/leagues/${leagueId}/tour-log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildTourLogEntry(players, best, round)),
+      }).catch(() => {});
+    }
 
     const { ids, penalty } = best.assignment;
     startCalculation(() => {

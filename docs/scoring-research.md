@@ -88,11 +88,15 @@ Own model (`match_model.py`, strictly point-in-time): Elo (goal-difference aware
 * **But** that model needs previous-season results (Elo carry-over) and team xG from `matchDetails`. A season-only Elo (what `fixtures_league` holds) is no better than the table (1.030 vs 1.026). So the fallback upgrade requires persisting team ratings across seasons (or fetching last season's results) — not built.
 * Own λ_total (xG form) correlates with the total goals of a match at 0.136 (odds' |log ratio| 0.077), i.e. goals/clean-sheet information that 1X2 odds lack, yet it did not improve the points model above (the signal is too weak against the noise of a single match).
 
+### 3. Start probability (`start_prob.py`)
+Hold-out AUC / log loss of "does he start": minutes share (current model) 0.807 / 0.534; suggested % alone 0.829; **current blend with the suggestion 0.842 / 0.493**; a logistic model on the minutes share + last-5 starts and minutes 0.852 / 0.480; plus squad membership / absences and last-10 starts 0.860 / 0.465. Refitting the 60/40 blend does not help (the blend is already optimal, linear w = 0.5…0.6 equal). Weighting the last-5 *minutes* above *starts* in the suggestion (0 % starts) gains only +0.004 AUC. The remaining gain (0.860) needs "was he even in the matchday squad" — which the production form feed (`playerData.recentMatches`) does not tell. Start probability is near saturation with the inputs available.
+
 ### Decisions
 * `calcScore` stays as is: no evidence that any extra match-difficulty term helps.
 * Optional improvement: replace the table fallback by Elo + xG form when odds are missing (needs persistence of ratings across seasons; expected gain only for those fixtures).
-* Best remaining lever: start probability (last-5 starts/minutes per player; see "Ideas not done"), then a smooth defence-bonus term.
-* Not possible yet: backtesting the user's **real** tours — tour recommendations are not stored. Logging each generated tour (scores, odds, formation) would allow it after a few rounds.
+* Start probability is near saturation with the available inputs (§3); what is left is better lineup information (injuries/suspensions/press conferences), then a smooth defence-bonus term.
+* Backtesting the user's **real** tours: since 2026-10-19 the tour page stores each recommendation (`tour_logs`, `/api/leagues/[id]/tour-log`); after a few rounds join them with the realised points.
+* Found while doing this: the first auto-select on the tour page ran before the odds had loaded (i.e. on the table fallback) — fixed (`playersReady`).
 
 ## Caveats
 
