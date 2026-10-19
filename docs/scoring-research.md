@@ -93,7 +93,7 @@ Hold-out AUC / log loss of "does he start": minutes share (current model) 0.807 
 
 ### Decisions
 * `calcScore` stays as is: no evidence that any extra match-difficulty term helps.
-* Optional improvement: replace the table fallback by Elo + xG form when odds are missing (needs persistence of ratings across seasons; expected gain only for those fixtures).
+* **Done (2026-10-19): Elo + xG form replaces the table fallback when odds are missing** (`lib/teamStrength.ts`, `lib/teamRatings.ts`; ratings persisted in `team_ratings`, last season replayed on the first run; the python reference and a golden test keep both in sync). The refit weights are unchanged — the model only substitutes the odds-derived probabilities. Checked live on the Premier League: Elo top = Manchester City, Arsenal; Arsenal–Everton at home 71 / 20 / 9.
 * Start probability is near saturation with the available inputs (§3); what is left is better lineup information (injuries/suspensions/press conferences), then a smooth defence-bonus term.
 * Backtesting the user's **real** tours: since 2026-10-19 the tour page stores each recommendation (`tour_logs`, `/api/leagues/[id]/tour-log`); after a few rounds join them with the realised points.
 * Found while doing this: the first auto-select on the tour page ran before the odds had loaded (i.e. on the table fallback) — fixed (`playersReady`).

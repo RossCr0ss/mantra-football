@@ -111,18 +111,21 @@ function impliedProb(odds: number | null | undefined): number | null {
 }
 
 /**
- * Own win / opponent win / draw probability of the fixture from the 1X2 odds. Any missing price falls
- * back to the empirical average for the fixture difficulty (3 when the difficulty is unknown too).
+ * Own win / opponent win / draw probability of the fixture from the 1X2 odds. Any missing price falls back to
+ * the own match-strength model (`fix.strength`) and then to the empirical average for the fixture difficulty
+ * (3 when the difficulty is unknown too).
  */
 export function matchContext(fix: TeamFixture | null, odds: FixtureOdds | null) {
   const diff = Math.min(5, Math.max(1, Math.round(fix?.difficulty ?? 3)));
   const own = odds && fix ? impliedProb(fix.isHome ? odds.home : odds.away) : null;
   const opp = odds && fix ? impliedProb(fix.isHome ? odds.away : odds.home) : null;
   const draw = odds && fix ? impliedProb(odds.draw) : null;
+  // Without odds: the own model (Elo + xG form) when the fixture carries it, else the table difficulty.
+  const model = fix?.strength ?? null;
   return {
-    winProb: own ?? WIN_PROB_BY_DIFFICULTY[diff],
-    oppWinProb: opp ?? OPP_WIN_PROB_BY_DIFFICULTY[diff],
-    drawProb: draw ?? DEFAULT_DRAW_PROB,
+    winProb: own ?? model?.win ?? WIN_PROB_BY_DIFFICULTY[diff],
+    oppWinProb: opp ?? model?.loss ?? OPP_WIN_PROB_BY_DIFFICULTY[diff],
+    drawProb: draw ?? model?.draw ?? DEFAULT_DRAW_PROB,
   };
 }
 

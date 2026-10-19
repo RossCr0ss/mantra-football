@@ -98,3 +98,27 @@ function parseMatchOdds(data: Record<string, unknown>): FixtureOdds | null {
 }
 
 // ============ Squad ============
+
+/**
+ * Team xG of a finished match (home, away) from the match-detail stats; null for a side without the figure
+ * (leagues without xG data, or a match that has not been played).
+ */
+export async function fetchMatchXg(matchId: string): Promise<{ home: number | null; away: number | null }> {
+  try {
+    const res = await fotmobFetch(`https://www.fotmob.com/api/data/matchDetails?matchId=${matchId}`);
+    if (!res.ok) return { home: null, away: null };
+    const data = await res.json() as Record<string, unknown>;
+    const groups = ((data?.content as Record<string, unknown> | null)?.stats as Record<string, unknown> | null)?.Periods as
+      { All?: { stats?: { stats?: { key?: string; stats?: (string | number | null)[] }[] }[] } } | undefined;
+    for (const g of groups?.All?.stats ?? []) {
+      for (const st of g.stats ?? []) {
+        if (st.key !== 'expected_goals' || !Array.isArray(st.stats)) continue;
+        const [h, a] = st.stats.map((v) => (v == null ? NaN : Number(v)));
+        if (Number.isFinite(h) && Number.isFinite(a)) return { home: h, away: a };
+      }
+    }
+    return { home: null, away: null };
+  } catch {
+    return { home: null, away: null };
+  }
+}

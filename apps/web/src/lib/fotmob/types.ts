@@ -164,6 +164,11 @@ export interface TeamFixture extends LeagueMatch {
    */
   difficulty: number | null;
   odds: FixtureOdds | null;
+  /**
+   * Own model (Elo + xG form, `lib/teamStrength.ts`): win / draw / loss probability from this team's point of view.
+   * Stands in for the bookmaker odds when they are missing. Absent until the league's ratings have been built.
+   */
+  strength?: { win: number; draw: number; loss: number } | null;
 }
 
 export interface MatchCardEvent {

@@ -56,6 +56,13 @@ describe('matchContext: win / opponent-win / draw probability', () => {
     expect(matchContext(fixture(5), { home: 1.0, draw: null, away: 3 })).toEqual({ winProb: 0.503, oppWinProb: 1 / 3, drawProb: 0.28 });
     expect(matchContext(null, null).winProb).toBe(0.411);        // difficulty unknown → 3
   });
+
+  it('uses the own model (Elo + xG form) between the odds and the table difficulty', () => {
+    const withModel = { ...fixture(3, true), strength: { win: 0.5, draw: 0.3, loss: 0.2 } } as TeamFixture;
+    expect(matchContext(withModel, null)).toEqual({ winProb: 0.5, oppWinProb: 0.2, drawProb: 0.3 });
+    expect(matchContext(withModel, odds)).toEqual({ winProb: 0.5, oppWinProb: 0.2, drawProb: 0.25 });
+    expect(matchContext(withModel, { home: 1.0, draw: 4.0, away: 5.0 }).winProb).toBe(0.5);   // unusable price → model
+  });
 });
 
 describe('expected points (start probability 1)', () => {

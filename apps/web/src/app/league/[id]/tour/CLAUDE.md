@@ -14,7 +14,9 @@ Page: `page.tsx` (UI + data loading only). Logic lives in `lib/`:
 - The first auto-select waits until `players` are enriched with the **final odds** (`playersReady`: odds loaded in the same batch as `oddsMap`). Before, it ran on the table-difficulty fallback, which the backtest shows is clearly worse.
 - Each auto-select without a pinned formation POSTs a snapshot (`buildTourLogEntry`, `lib/tourLog.ts`) to `/api/leagues/[id]/tour-log` (one document per league + round, the last one wins).
 
-## Fixture difficulty (fallback only)
+## Fixture difficulty (last-resort fallback)
+Order of match context in `calcScore`: bookmaker odds → own model (`fix.strength`, Elo + xG form, `docs/scoring.md`) → the table difficulty below.
+
 `buildTeamFixtures` (`lib/fixturesCache.ts`): `difficulty = clamp(ceil(opponentTablePos / totalTeams * 5), 1, 5)`. Top opponent → **1 = hardest (red)**, bottom → **5 = easiest (dark green)**. Styles in `lib/fixtureDifficulty.ts`. `calcScore` uses the 1X2 odds; difficulty only supplies the win/opponent-win probabilities when odds are missing.
 
 ## Editing tips

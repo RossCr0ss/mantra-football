@@ -9,13 +9,14 @@
 | `clientCache.ts` | `fetchJsonCached(key, url, {refresh})` + `CACHE_KEY.{analytics,fixtures,form}(leagueId)` — sessionStorage (15 min) in front of an API GET; `refresh` bypasses it and sends `?refresh=1`. Also `cacheGet/cacheSet` |
 | `injuryDate.ts` | `isReturningToday(info)`, `isInjuryActive`, `isInjuryListed`, `isShownHealed` |
 | `fixtureDifficulty.ts` | `DIFFICULTY_STYLE` (1 = hardest/red … 5 = easiest/green) |
+| `teamStrength.ts` (+ `teamStrengthCoef.json`) | pure Elo + xG-form match model: `applyMatch`, `predictOutcome`, `emptyRatingState` |
 | `tourScoring.ts`, `tourModules.ts` | tour scoring + formation assignment (pure; see tour/CLAUDE.md) |
 | `nameMatch.ts` | `matchMantraPlayer()` fuzzy FotMob↔mantrafootball matching |
 | `suspensionRules.ts` | `YELLOW_CARD_BAN_THRESHOLD`, `YELLOW_CARD_WARNING_THRESHOLD` |
 | `testUtils.ts` | test factories (`makePlayer`, `makeMatch`, `makeForm`) — tests only |
 
 ## Server-only modules
-`fotmob.ts` + `fotmob/*`, `fotmobCache.ts`, `mongoCache.ts`, `fixturesCache.ts`, `mantraFootball.ts`, `mantraFootballCache.ts`, `injuries.ts`, `suspensionCheck.ts`, `squadStats.ts`, `availabilitySuggestion.ts`, `mongodb.ts`.
+`fotmob.ts` + `fotmob/*`, `fotmobCache.ts`, `mongoCache.ts`, `fixturesCache.ts`, `mantraFootball.ts`, `mantraFootballCache.ts`, `injuries.ts`, `suspensionCheck.ts`, `squadStats.ts`, `availabilitySuggestion.ts`, `teamRatings.ts` (builds/reads `team_ratings`, `attachStrength`), `mongodb.ts`.
 
 ## Caching (details: `docs/cache.md`)
 - `mongoCache.ts` `withCache(collection, filter, CACHE_TTL.X, fetcher, {forceRefresh})` is **stale-while-revalidate** (`freshMs` / `staleMs`, deduped background refresh). TTL values live in `CACHE_TTL` in code — trust the code over docs.
@@ -36,6 +37,7 @@ Import from `@/lib/fotmob` in server code (barrel re-exports everything). Files:
 | `fetchLeagueSeasonId` / `fetchLeaguePreviousSeasonId` | Season ids |
 | `fetchLeagueData(leagueId)` | One call → `{ tablePositions, matches, currentRound }` (all fixtures) |
 | `fetchMatchOdds` (server) / `fetchMatchOddsClient` (→ `/api/matches/[id]/odds`) | 1×2 odds; needs `FOTMOB_CCODE3` + `FOTMOB_BETTING_PROVIDER` |
+| `fetchLeagueSeasonData(leagueId, season?)`, `fetchMatchXg(matchId)` | Season matches + season labels (any season) / team xG of a finished match — feed `teamRatings.ts` |
 | `fetchPlayerRecentMatches`, `fetchMatchCardEvents` | Form + card events (used by form route, suspension check) |
 | `fetchPlayerCurrentTeam`, `searchFotMobPlayer`, `fetchPlayerPrimaryPosition` | Player lookup helpers |
 | `fetchPlayerRichStats` | `playerData` endpoint — **Turnstile-blocked** server-side; needs `FOTMOB_COOKIE`. Injuries: use `getPlayerInjury()` in `injuries.ts` (DB override → FotMob). Removed as dead: `fetchPlayerInjuryInfo`, `fetchPlayerSeasonStats` (see git history) |

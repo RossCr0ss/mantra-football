@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { parseLeagueParam, apiError } from '@/lib/apiUtils';
 import type { TeamFixture } from '@/lib/fotmob';
 import { getLeagueFixturesCached, buildTeamFixtures } from '@/lib/fixturesCache';
+import { getTeamRatings, attachStrength } from '@/lib/teamRatings';
 import { getDb } from '@/lib/mongodb';
 import type { Squad } from '@/types/squad';
 
@@ -29,5 +30,8 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     fixtures[id] = buildTeamFixtures(id, matches, tablePositions, currentRound);
   });
 
-  return NextResponse.json({ fixtures, currentRound, cachedAt });
+  // Own match-strength model for fixtures without odds; never blocks (null until the ratings exist).
+  const ratings = await getTeamRatings(leagueId).catch(() => null);
+
+  return NextResponse.json({ fixtures: attachStrength(fixtures, ratings), currentRound, cachedAt });
 }

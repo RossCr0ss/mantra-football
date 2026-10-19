@@ -90,6 +90,7 @@ d3 = D['diff'].fillna(3).round().clip(1, 5).astype(int)
 SRC = {
     'real odds':          (F.wp, F.owp, F.dp),
     'own model':          (D.own_win, D.own_opp, D.own_draw),
+    'own × overround':    (D.own_win * 1.0811, D.own_opp * 1.0811, D.own_draw * 1.0811),
     'app table fallback': (d3.map(WP_BY_DIFF), d3.map(OWP_BY_DIFF), pd.Series(DP_DEFAULT, index=D.index)),
 }
 for g, cols in SETS.items():

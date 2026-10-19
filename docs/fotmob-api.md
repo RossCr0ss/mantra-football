@@ -16,7 +16,9 @@ FotMob is used as the primary data source. There is no API key — requests use 
 
 ### GET `/api/data/leagues?id={leagueId}`
 
-Used by: `fetchLeagueTeams`, `fetchLeagueData`
+Used by: `fetchLeagueTeams`, `fetchLeagueData`, `fetchLeagueSeasonData`
+
+`&season=2025%2F2026` returns any past season (same shape). `details.selectedSeason` is the season label of the response, `allAvailableSeasons` lists labels newest first (the entry after the selected one is the previous season).
 
 Returns league table, all season matches, and current round info.
 
@@ -304,3 +306,7 @@ All image URLs are constructed from IDs — never stored in the database.
 | Wrong CDN stat key names → 403 | Stats remain null | Use exact keys from `CDN_STAT_CONFIG` — not guessed names |
 | `ParticiantId` is a typo in FotMob API | Code looks like a typo | It's correct — FotMob's field is misspelled |
 | `primarySeasonId` is a number in JSON | Wrong type if used as string | Always `String(seasonId)` when passing to stat endpoints |
+
+### GET `/api/data/matchDetails?matchId={id}` — team xG
+
+Used by: `fetchMatchCardEvents` (cards) and `fetchMatchXg` (team xG, feeds `lib/teamRatings.ts`). Team xG is `content.stats.Periods.All.stats[].stats[]` with `key: "expected_goals"`, whose `stats` is `["1.88", "0.20"]` (home, away; strings; the same key also appears in a period block with `[null, null]`). It equals the sum of the players' `expected_goals` in `content.playerStats`. Leagues/matches without xG data have no such entry.

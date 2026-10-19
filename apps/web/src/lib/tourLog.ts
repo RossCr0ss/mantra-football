@@ -17,6 +17,8 @@ export interface TourLogPlayer {
   matchId: string | null;
   isHome: boolean | null;
   difficulty: number | null;
+  /** Own model's win / draw / loss probability (team's view), when the fixture carried it. */
+  strength: { win: number; draw: number; loss: number } | null;
   odds: { home: number | null; draw: number | null; away: number | null } | null;
 }
 
@@ -59,6 +61,7 @@ export function buildTourLogEntry(
       matchId: p.nextFixture?.matchId ?? null,
       isHome: p.nextFixture?.isHome ?? null,
       difficulty: p.nextFixture?.difficulty ?? null,
+      strength: p.nextFixture?.strength ?? null,
       odds: p.odds ? { home: p.odds.home, draw: p.odds.draw, away: p.odds.away } : null,
     })),
   };

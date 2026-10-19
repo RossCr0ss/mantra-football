@@ -147,6 +147,7 @@ The tactics view (`components/tour/PitchView.tsx`) uses `max-w-sm sm:max-w-xl md
 |---|---|---|
 | `squads` | `leagueId` | User squad (players, mantraPositions, lineupStatus, availabilityPct) |
 | `player_injuries` | `playerId` | Manual injury overrides; `cleared: true` suppresses FotMob data |
+| `team_ratings` | `leagueId` | Elo + xG-form state of every team (`TeamRatingState`) and the ids of the matches already processed — the own match-strength model (`lib/teamRatings.ts`) |
 | `tour_logs` | `leagueId`, `round` | Engine's own tour recommendation (formation, slots, per-player score / start probability / availability / odds), upserted by the tour page — raw material for backtests on real squads (`lib/tourLog.ts`) |
 | `fotmob_teams` | `leagueId` | Cached FotMob team list (24h TTL) |
 | `fotmob_players` | `teamId` | Cached squad + basic stats (6h TTL) |

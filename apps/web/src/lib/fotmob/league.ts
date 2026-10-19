@@ -120,7 +120,25 @@ export async function fetchLeagueData(leagueId: number): Promise<{
   const matchesBlock = data?.fixtures as Record<string, unknown> | null;
   const raw = (matchesBlock?.allMatches as Record<string, unknown>[]) ?? [];
 
-  const matches: LeagueMatch[] = raw
+  const matches = parseLeagueMatches(raw);
+
+  // Determine the current active round from firstUnplayedMatch.
+  // Use matchId lookup (not index — firstUnplayedMatchIndex is 1-based in the API).
+  const firstUnplayed = matchesBlock?.firstUnplayedMatch as
+    { firstUnplayedMatchId?: string } | null;
+  const firstUnplayedId = firstUnplayed?.firstUnplayedMatchId
+    ? String(firstUnplayed.firstUnplayedMatchId)
+    : null;
+  const currentRound = firstUnplayedId
+    ? (matches.find((m) => m.matchId === firstUnplayedId)?.round ?? null)
+    : null;
+
+  return { tablePositions, matches, currentRound };
+}
+
+/** Parses `fixtures.allMatches` of the leagues endpoint into LeagueMatch entries. */
+export function parseLeagueMatches(raw: Record<string, unknown>[]): LeagueMatch[] {
+  return raw
     .map((m): LeagueMatch | null => {
       const home = m.home as { id: string | number; name: string; score?: number | string | null } | null;
       const away = m.away as { id: string | number; name: string; score?: number | string | null } | null;
@@ -171,17 +189,24 @@ export async function fetchLeagueData(leagueId: number): Promise<{
       };
     })
     .filter((m): m is LeagueMatch => m !== null);
+}
 
-  // Determine the current active round from firstUnplayedMatch.
-  // Use matchId lookup (not index — firstUnplayedMatchIndex is 1-based in the API).
-  const firstUnplayed = matchesBlock?.firstUnplayedMatch as
-    { firstUnplayedMatchId?: string } | null;
-  const firstUnplayedId = firstUnplayed?.firstUnplayedMatchId
-    ? String(firstUnplayed.firstUnplayedMatchId)
-    : null;
-  const currentRound = firstUnplayedId
-    ? (matches.find((m) => m.matchId === firstUnplayedId)?.round ?? null)
-    : null;
-
-  return { tablePositions, matches, currentRound };
+/**
+ * All matches of a league season plus the season labels ("2026/2027" and the one before it). `season` omitted = the
+ * current season. Used to build the team ratings (`lib/teamRatings.ts`), which need last season's results too.
+ */
+export async function fetchLeagueSeasonData(
+  leagueId: number,
+  season?: string,
+): Promise<{ season: string | null; previousSeason: string | null; matches: LeagueMatch[] }> {
+  const q = season ? `&season=${encodeURIComponent(season)}` : '';
+  const res = await fotmobFetch(`https://www.fotmob.com/api/data/leagues?id=${leagueId}${q}`);
+  if (!res.ok) throw new Error(`FotMob leagues ${leagueId} ${season ?? ''}: HTTP ${res.status}`);
+  const data = await res.json() as Record<string, unknown>;
+  const details = data?.details as { selectedSeason?: string } | null;
+  const all = (data?.allAvailableSeasons as string[] | undefined) ?? [];
+  const label = details?.selectedSeason ?? season ?? null;
+  const idx = label ? all.indexOf(label) : -1;
+  const raw = ((data?.fixtures as Record<string, unknown> | null)?.allMatches as Record<string, unknown>[]) ?? [];
+  return { season: label, previousSeason: idx >= 0 ? (all[idx + 1] ?? null) : null, matches: parseLeagueMatches(raw) };
 }

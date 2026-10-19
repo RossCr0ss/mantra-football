@@ -73,7 +73,12 @@ expectedPoints = w.intercept + w.rating × rating
 ```
 winProb = 1 / (odds of the player's team)    oppWinProb = 1 / (odds of the opponent)    drawProb = 1 / (draw odds)
 ```
-A missing or ≤1 price falls back to the empirical average for the fixture difficulty (1…5): winProb 0.244 / 0.348 / 0.411 / 0.448 / 0.503, oppWinProb 0.587 / 0.455 / 0.381 / 0.342 / 0.296, drawProb 0.28. Raw `1/odds` are used (not normalised) — the fit used them the same way.
+A missing or ≤1 price falls back to the **own match-strength model** (`fix.strength`: Elo + xG form, `lib/teamStrength.ts`, see below) and, if the fixture has none either (ratings not built yet), to the empirical average for the fixture difficulty (1…5): winProb 0.244 / 0.348 / 0.411 / 0.448 / 0.503, oppWinProb 0.587 / 0.455 / 0.381 / 0.342 / 0.296, drawProb 0.28. Raw `1/odds` are used (not normalised) — the fit used them the same way.
+
+### Own match-strength model (fallback when there are no odds)
+`lib/teamStrength.ts` (pure; python reference `scripts/weights-research/match_model.py`, golden test `teamStrength.test.ts`): per league and team an **Elo** (K 18, home advantage 55, goal-difference multiplier, 30 % of the distance to 1500 lost at each new season) and an **xG form** (exponentially weighted team xG for / against, half-life 8 matches, trusted fully after 6 matches). Expected goals `λ_home = (xGF_home + xGA_away)/2 × 1.10`, `λ_away = (xGF_away + xGA_home)/2 × 0.92`; 1X2 = softmax of a fitted linear function of `[Elo diff, λ_home − λ_away, λ_home + λ_away]` (`teamStrengthCoef.json`, refit with `export_team_strength.py`). Held-out log loss 1.003 vs 0.971 for the odds and 1.026 for the league table; fed into the points model instead of odds it costs 0.02–0.03 MSE per starter against 0.09–0.11 for the table fallback.
+
+Ratings are built by `lib/teamRatings.ts` (Mongo `team_ratings`): the first run replays last season's results (goals stand in for xG), later runs feed every new finished match in chronological order with its team xG from `matchDetails` (goals when missing); refresh when older than 6 h, in the background — `/api/leagues/[id]/fixtures` never waits for it and omits `strength` until the first build has finished (about half a minute per league).
 
 ### Weights (`SCORE_WEIGHTS.byGroup`, pinned in `tourScoring.weights.test.ts`)
 
