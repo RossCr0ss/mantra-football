@@ -24,3 +24,12 @@ python sim/report.py old new
 Changing the leagues/seasons: `LEAGUES=…`, `SEASONS=…` for `fetch_data.py` (and `LEAGUES` / `MANTRA_TOURNAMENT` in it, `LEAGUES` in `build_table.py`). Changing a rule (goal bonus, clean-sheet bonus, cards…): `build_table.py` → `add_points` (check https://mantrafootball.org/rules). The features in `fit_weights.py` (`feats`) must stay identical to `calcScore` / `estimateStartProb`; after refitting update `SCORE_WEIGHTS`, `docs/scoring.md` and `tourScoring.weights.test.ts` together.
 
 `data/` and `sim/work/` are git-ignored (≈ 250 MB).
+
+## Follow-up analyses (Oct 2026)
+```
+sim/run_regret.sh <label> [none|sugg|oracle] [weights.json]   # → sim/work/regret_<label>.json: realised points of every formation, engine vs hindsight scores
+python sim/report_regret.py <label> ...                        # regret decomposition: formation vs players
+python match_model.py                                          # Elo + xG-form match model vs odds vs table → data/match_model.pkl
+python incremental_value.py                                    # does the own match model add to the points model / the no-odds fallback?
+```
+Results: `docs/scoring-research.md` §Follow-up. (No pip/venv on the dev box? `get-pip.py --target <dir>`, then `PYTHONPATH=<dir>`.)

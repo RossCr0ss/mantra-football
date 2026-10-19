@@ -5,5 +5,5 @@ import path from 'node:path';
 export default {
   root: path.resolve(import.meta.dirname),
   resolve: { alias: { '@': path.resolve(process.env.SRC) } },
-  test: { include: ['run.test.ts'], globals: true, environment: 'node', testTimeout: 1800000 },
+  test: { include: [process.env.TEST_FILE ?? 'run.test.ts'], globals: true, environment: 'node', testTimeout: 1800000 },
 };

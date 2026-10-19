@@ -52,6 +52,48 @@ Ablations (with suggested availability, vs the full new model): without attackin
 
 Takeaway: **who plays** decides the XI; the individual weights matter at the margin. Make sure every player has an availability (Team page suggestions), and keep the minutes model for those who have none.
 
+## Follow-up (2026-10-19): where the remaining gap is, and is an own match-strength model worth it?
+
+Scripts: `sim/run_regret.sh` + `sim/report_regret.py` (regret decomposition), `match_model.py`, `incremental_value.py` (own match model). Same 1,944 simulated squads / 3,138 matches, weights fitted before 2026-02-15.
+
+### 1. Regret: players or formation?
+
+Realised points of the XI (+ defence bonus), average of 1,944 squads. "Hindsight" = rank by the real points.
+
+| Availability | engine | engine XI, hindsight-best formation | hindsight XI, engine's formation | hindsight XI + formation |
+|---|---|---|---|---|
+| none | 75.4 | 79.2 | 88.6 | 90.3 |
+| suggested (Team page) | 76.8 | 80.3 | 88.7 | 90.3 |
+| lineup known (oracle) | 82.7 | 84.8 | 89.0 | 90.3 |
+
+* **Formation choice is a small lever and the engine does it right**: with the same scores, the formation the engine picks realises **+1.3 ± 0.16** over an average formation (+1.4 with suggestions, +2.2 with known lineups) — real skill, not noise. The "+3.5 for the perfect formation" is mostly the maximum of 12 noisy numbers, not attainable.
+* **Who plays is the gap**: knowing the lineup is worth +6 points (76.8 → 82.7). The remaining ~7.5 to hindsight is performance noise (a single match explains 3–10 % of the variance of a starter's points) and cannot be bought with a better formula.
+* Practical consequence: improve the **start-probability input** (recent starts/minutes per player, injuries, suspensions, press-conference lineups) before touching match-difficulty terms.
+
+### 2. Match difficulty: odds vs own model vs table
+
+Own model (`match_model.py`, strictly point-in-time): Elo (goal-difference aware, home advantage, shrink between seasons) and an xG-form model (exponentially weighted team xG for/against, half-life 8 matches → Poisson λ). Walk-forward 1X2 evaluation on 1,373 matches with odds (Oct 2025 →):
+
+| 1X2 model | log loss | vs odds |
+|---|---|---|
+| bookmaker odds (de-vigged, recalibrated) | 0.971 | – |
+| own: Elo + xG form | 1.003 | +0.033 ± 0.014 |
+| Elo only / xG form only | 1.012 / 1.009 | +0.04 |
+| Elo from the current season only (all the app has today) | 1.030 | +0.059 |
+| league table: position + points per game | 1.026 | +0.055 ± 0.021 |
+| odds + own model | 0.972 | **+0.002 ± 0.004** |
+
+* **The odds already contain everything the own model knows** (form, strength, injuries, home advantage): adding it changes nothing. Same for the player-points model: own λ for / against and clean-sheet probability as extra regressors on top of the odds change held-out MSE by 0.000–0.005 ± 0.006–0.009 per position group (GK +0.026 ± 0.026) — nothing. **Do not add a hand-made difficulty on top of the odds** and do not add a separate "team form" term (consistent with finding 4 above).
+* Where the own model is useful: **when there are no odds** (≈ 9 % of historical matches; far-ahead fixtures; the app's 22Bet feed may miss more). Fed into the points model instead of odds, it loses 0.02–0.03 MSE per starter (DEF 2.140 vs 2.117 with odds) while the app's table fallback (5 steps) loses 0.09–0.11 (DEF 2.223): own vs table ΔMSE +0.07…+0.12, significant for DEF/MID/FWD.
+* **But** that model needs previous-season results (Elo carry-over) and team xG from `matchDetails`. A season-only Elo (what `fixtures_league` holds) is no better than the table (1.030 vs 1.026). So the fallback upgrade requires persisting team ratings across seasons (or fetching last season's results) — not built.
+* Own λ_total (xG form) correlates with the total goals of a match at 0.136 (odds' |log ratio| 0.077), i.e. goals/clean-sheet information that 1X2 odds lack, yet it did not improve the points model above (the signal is too weak against the noise of a single match).
+
+### Decisions
+* `calcScore` stays as is: no evidence that any extra match-difficulty term helps.
+* Optional improvement: replace the table fallback by Elo + xG form when odds are missing (needs persistence of ratings across seasons; expected gain only for those fixtures).
+* Best remaining lever: start probability (last-5 starts/minutes per player; see "Ideas not done"), then a smooth defence-bonus term.
+* Not possible yet: backtesting the user's **real** tours — tour recommendations are not stored. Logging each generated tour (scores, odds, formation) would allow it after a few rounds.
+
 ## Caveats
 
 * **The old baseline is flattering to the old formula.** The backtest feeds it correct stats, but the production data are partly broken: the CDN `shots` field is the shot *accuracy %* (Haaland 2025/26: 46.8 vs 59 shots on target of 126), `foulsCommitted` / `bigChancesMissed` / `possessionWonFinal3rd` are not totals either, and `successfulDribbles`, `aerialsWon`, `dribbledPast`, `highClaims` are never fetched. The new model avoids all of these (`docs/refactor-backlog.md` §10).
