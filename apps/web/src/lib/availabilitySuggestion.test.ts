@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { suggestAvailabilityPct, summarizeRecentForm } from './availabilitySuggestion';
+import { planAvailabilityReset, suggestAvailabilityPct, summarizeRecentForm } from './availabilitySuggestion';
 import { makeForm } from './testUtils';
 
 describe('suggestAvailabilityPct', () => {
@@ -33,5 +33,28 @@ describe('summarizeRecentForm', () => {
 
   it('counts clean sheets only for goalkeepers and only started matches', () => {
     expect(summarizeRecentForm(matches, 'GK').cleanSheetsRecent).toBe(1);
+  });
+});
+
+describe('planAvailabilityReset', () => {
+  it('suggests for manual players with a suggestion, clears those without, skips the rest', () => {
+    const plan = planAvailabilityReset(
+      [
+        { id: 1, availabilityPctSource: 'manual' },
+        { id: 2, availabilityPctSource: 'manual' },
+        { id: 3, availabilityPctSource: 'suggested' },
+        { id: 4 },
+      ],
+      { 1: 80, 2: null, 3: 50, 4: 50 },
+    );
+    expect(plan).toEqual([
+      { playerId: 1, action: 'suggest', pct: 80 },
+      { playerId: 2, action: 'clear' },
+    ]);
+  });
+  it('keeps a suggested 0 instead of clearing it', () => {
+    expect(planAvailabilityReset([{ id: 1, availabilityPctSource: 'manual' }], { 1: 0 })).toEqual([
+      { playerId: 1, action: 'suggest', pct: 0 },
+    ]);
   });
 });

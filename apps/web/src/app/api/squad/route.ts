@@ -46,7 +46,8 @@ export async function PATCH(req: NextRequest) {
     playerId: number;
     mantraPositions?: MantraPosition[];
     lineupStatus?: LineupStatus | null;
-    availabilityPct?: number;
+    /** null clears the value and its source (back to the minutes-based estimate) */
+    availabilityPct?: number | null;
     availabilityPctSource?: 'manual' | 'suggested';
     lineupStatusSource?: 'manual' | 'auto';
     teamId?: number;
@@ -76,13 +77,17 @@ export async function PATCH(req: NextRequest) {
   if (lineupStatusSource !== undefined) {
     $set['players.$.lineupStatusSource'] = lineupStatusSource;
   }
-  if (availabilityPct !== undefined) {
+  const $unset: Record<string, ''> = {};
+  if (availabilityPct === null) {
+    $unset['players.$.availabilityPct'] = '';
+    $unset['players.$.availabilityPctSource'] = '';
+  } else if (availabilityPct !== undefined) {
     if (typeof availabilityPct !== 'number' || availabilityPct < 0 || availabilityPct > 100) {
       return NextResponse.json({ error: 'Invalid availabilityPct' }, { status: 400 });
     }
     $set['players.$.availabilityPct'] = availabilityPct;
   }
-  if (availabilityPctSource !== undefined) {
+  if (availabilityPctSource !== undefined && availabilityPct !== null) {
     $set['players.$.availabilityPctSource'] = availabilityPctSource;
   }
   if (teamId !== undefined && teamName !== undefined) {
@@ -93,7 +98,7 @@ export async function PATCH(req: NextRequest) {
   const db = await getDb();
   await db.collection<Squad>('squads').updateOne(
     { leagueId, 'players.id': playerId },
-    { $set },
+    Object.keys($unset).length > 0 ? { $set, $unset } : { $set },
   );
 
   return NextResponse.json({ ok: true });

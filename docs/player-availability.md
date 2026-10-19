@@ -53,12 +53,14 @@ A 0% player is NOT blocked — they can still be manually selected. They just ha
 
 Each player card has:
 - **Injury / Suspension toggles** — tapping toggles the status on/off; tapping the active one clears it
-- **Availability % buttons** (0% / 50% / 75% / 100%) — only shown when not injured/suspended
+- **Start % slider** — only shown when not injured/suspended. A hand-set value gets the yellow **CUSTOM ↺** badge (per-player reset to the form suggestion)
+- **Reset N custom ↺** (page toolbar, shown when any value is `manual`) — resets all hand-set Start % at once (`planAvailabilityReset`, `lib/availabilitySuggestion.ts`): players with a form suggestion get it (`suggested`); those without get the value **cleared** (`PATCH` with `availabilityPct: null` → `$unset` of value and source), so the tour falls back to the minutes-based estimate
+- **Injured toggle on a healed player** — sets `lineupStatus: 'injured'` *and* deletes the "healed" override (`DELETE /api/players/[id]/injury`), otherwise the card kept showing "✓ Healed" and a stale `cleared` record hid new FotMob injuries. The Injury Report / "Injured" counter list `isInjuryListed` players: an uncleared record **or** a manual `lineupStatus: 'injured'` (`lib/injuryDate.ts`)
 
 ### InjuryReportView (`/league/[id]/injuries`)
 
 Quick actions per player:
-- **Healed** button — clears FotMob injury data (calls `PUT /api/players/[id]/injury` with `{cleared: true}`) and removes `lineupStatus: 'injured'` if set
+- **Healed** button — clears FotMob injury data (calls `PUT /api/players/[id]/injury` with `{cleared: true}`) and removes `lineupStatus: 'injured'` if set (persisted via `PATCH /api/squad`; same on the Team page)
 - **Clear** button (suspended players) — sends `PATCH /api/squad` with `{lineupStatus: null}`
 - **Full** button (doubtful players) — sends `PATCH /api/squad` with `{availabilityPct: 100}`
 
@@ -74,7 +76,7 @@ Both fields are stored on the `SquadPlayer` object inside the `squads` MongoDB c
   leagueId: number
   playerId: number
   lineupStatus?: 'injured' | 'suspended' | null   // null clears it
-  availabilityPct?: number   // 0–100
+  availabilityPct?: number | null   // 0–100; null clears the value and its source
 }
 ```
 

@@ -7,7 +7,7 @@
 | `positionGroups.ts` | `POSITION_ORDER`, `POSITION_SECTIONS`, `POSITION_RING`, `effectivePositionGroup(player)` |
 | `mantraPositions.ts` | `MANTRA_POSITIONS`, `MANTRA_POSITION_COLOR`, `guessMantraPositions` |
 | `clientCache.ts` | `fetchJsonCached(key, url, {refresh})` + `CACHE_KEY.{analytics,fixtures,form}(leagueId)` — sessionStorage (15 min) in front of an API GET; `refresh` bypasses it and sends `?refresh=1`. Also `cacheGet/cacheSet` |
-| `injuryDate.ts` | `isReturningToday(info)` |
+| `injuryDate.ts` | `isReturningToday(info)`, `isInjuryActive`, `isInjuryListed`, `isShownHealed` |
 | `fixtureDifficulty.ts` | `DIFFICULTY_STYLE` (1 = hardest/red … 5 = easiest/green) |
 | `tourScoring.ts`, `tourModules.ts` | tour scoring + formation assignment (pure; see tour/CLAUDE.md) |
 | `nameMatch.ts` | `matchMantraPlayer()` fuzzy FotMob↔mantrafootball matching |

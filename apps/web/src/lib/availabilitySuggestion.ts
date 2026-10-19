@@ -1,4 +1,4 @@
-import type { PositionGroup } from '@/types/squad';
+import type { PositionGroup, SquadPlayer } from '@/types/squad';
 import type { PlayerRecentMatch } from '@/lib/fotmob';
 
 /**
@@ -37,4 +37,26 @@ export function summarizeRecentForm(
       : 0;
 
   return { goalsRecent, assistsRecent, cleanSheetsRecent };
+}
+
+/** What to do with one hand-set Start % when resetting it: take the suggestion, or drop it (minutes model). */
+export type AvailabilityReset =
+  | { playerId: number; action: 'suggest'; pct: number }
+  | { playerId: number; action: 'clear' };
+
+/**
+ * Plan for "reset all custom Start %": every `manual` player gets the suggested value from recent form;
+ * with no suggestion the value is cleared altogether so the tour falls back to the minutes-based estimate
+ * instead of keeping the hand-set number.
+ */
+export function planAvailabilityReset(
+  players: Pick<SquadPlayer, 'id' | 'availabilityPctSource'>[],
+  suggestedById: Record<number, number | null | undefined>,
+): AvailabilityReset[] {
+  return players
+    .filter((p) => p.availabilityPctSource === 'manual')
+    .map((p): AvailabilityReset => {
+      const pct = suggestedById[p.id];
+      return pct != null ? { playerId: p.id, action: 'suggest', pct } : { playerId: p.id, action: 'clear' };
+    });
 }

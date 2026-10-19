@@ -9,6 +9,8 @@ import { matchMantraPlayer } from '@/lib/nameMatch';
 import type { MantraPlayer } from '@/lib/mantraFootball';
 import type { PlayerSuspensionInfo } from '@/lib/suspensionCheck';
 import { PlayerCard, SectionHeader, type PlayerForm } from '@/components/team/PlayerCard';
+import { planAvailabilityReset } from '@/lib/availabilitySuggestion';
+import { isInjuryListed } from '@/lib/injuryDate';
 import { InjuryReportSection } from '@/components/team/InjuryReportSection';
 
 function samePositions(a: MantraPosition[], b: MantraPosition[]): boolean {
@@ -52,6 +54,11 @@ export default function TeamSquadView({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ leagueId, playerId, lineupStatus: newStatus, lineupStatusSource: 'manual' }),
     });
+    // Marking a healed player injured again: drop the "healed" override so the injury is not
+    // hidden behind a stale ✓ Healed (and live FotMob data flows again).
+    if (status === 'injured' && newStatus === 'injured' && injuries[playerId]?.cleared) {
+      await resetToFotmob(playerId);
+    }
   }
 
   const [suspensions, setSuspensions] = useState<Record<number, PlayerSuspensionInfo>>(initialSuspensions ?? {});
@@ -190,6 +197,15 @@ export default function TeamSquadView({
       const data = await res.json();
       setInjuries((prev) => ({ ...prev, [playerId]: data.injury }));
       setEditingInjuryId(null);
+      // A manual "injured" status would keep the player blocked — Healed lifts it too.
+      if (players.find((p) => p.id === playerId)?.lineupStatus === 'injured') {
+        setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, lineupStatus: undefined } : p)));
+        await fetch('/api/squad', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leagueId, playerId, lineupStatus: null, lineupStatusSource: 'manual' }),
+        });
+      }
     } finally {
       setInjuryActionId(null);
     }
@@ -389,6 +405,53 @@ export default function TeamSquadView({
     }
   }
 
+  const customCount = players.filter((p) => p.availabilityPctSource === 'manual').length;
+  const [resettingCustom, setResettingCustom] = useState(false);
+
+  /** Resets every hand-set Start % to the suggestion from form (or clears it when there is none). */
+  async function resetAllCustom() {
+    if (customCount === 0 || !window.confirm(`Reset ${customCount} custom Start % value(s) to auto?`)) return;
+    setResettingCustom(true);
+    try {
+      const manual = players.filter((p) => p.availabilityPctSource === 'manual');
+      const forms = await Promise.all(
+        manual.map(async (p) => {
+          try { return { id: p.id, f: form[p.id] ?? (await fetchPlayerForm(p)) }; } catch { return null; }
+        }),
+      );
+      const found = forms.filter((r): r is { id: number; f: PlayerForm } => r !== null);
+      setForm((prev) => ({ ...prev, ...Object.fromEntries(found.map((r) => [r.id, r.f])) }));
+      // players whose form could not be fetched are left untouched (not cleared on a network error)
+      const foundIds = new Set(found.map((r) => r.id));
+      const plan = planAvailabilityReset(manual.filter((p) => foundIds.has(p.id)), Object.fromEntries(found.map((r) => [r.id, r.f.suggestedPct])));
+      const byId = new Map(plan.map((a) => [a.playerId, a]));
+      setPlayers((prev) =>
+        prev.map((p) => {
+          const a = byId.get(p.id);
+          if (!a) return p;
+          if (a.action === 'suggest') return { ...p, availabilityPct: a.pct, availabilityPctSource: 'suggested' as const };
+          return { ...p, availabilityPct: undefined, availabilityPctSource: undefined };
+        }),
+      );
+      await Promise.all(
+        plan.map((a) =>
+          fetch('/api/squad', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(
+              a.action === 'suggest'
+                ? { leagueId, playerId: a.playerId, availabilityPct: a.pct, availabilityPctSource: 'suggested' }
+                : { leagueId, playerId: a.playerId, availabilityPct: null },
+            ),
+          }),
+        ),
+      );
+      setFormSummary(`Reset ${plan.length} custom value(s)`);
+    } finally {
+      setResettingCustom(false);
+    }
+  }
+
   const [refreshingInjuries, setRefreshingInjuries] = useState(false);
 
   async function refreshInjuries() {
@@ -412,7 +475,7 @@ export default function TeamSquadView({
     }
   }
 
-  const injuredPlayers = players.filter((p) => injuries[p.id] != null && !injuries[p.id]!.cleared);
+  const injuredPlayers = players.filter((p) => isInjuryListed(p, injuries[p.id]));
 
   return (
     <div className="space-y-10">
@@ -452,6 +515,16 @@ export default function TeamSquadView({
         >
           {updatingForm ? 'Updating…' : 'Update Start % from form'}
         </button>
+        {customCount > 0 && (
+          <button
+            onClick={resetAllCustom}
+            disabled={resettingCustom}
+            title="Reset every hand-set Start % to the algorithm's suggestion"
+            className="rounded-lg bg-yellow-600/20 px-3 py-1.5 text-xs font-semibold text-yellow-400 transition hover:bg-yellow-600/30 disabled:opacity-40"
+          >
+            {resettingCustom ? 'Resetting…' : `Reset ${customCount} custom ↺`}
+          </button>
+        )}
         {teamRefreshSummary && <span className="max-w-md text-right text-xs text-gray-500">{teamRefreshSummary}</span>}
         <button
           onClick={refreshTeamInfo}
