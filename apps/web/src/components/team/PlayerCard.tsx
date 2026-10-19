@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Image from 'next/image';
 import type { SquadPlayer, MantraPosition, PositionGroup, LineupStatus } from '@/types/squad';
-import { isReturningToday } from '@/lib/injuryDate';
+import { isReturningToday, isShownHealed } from '@/lib/injuryDate';
 import type { PlayerInjuryInfo, PlayerRecentMatch, PlayerSeasonStats } from '@/lib/fotmob';
 import { MANTRA_POSITIONS, MANTRA_POSITION_COLOR, type MantraPositionDef } from '@/lib/mantraPositions';
 import { POSITION_RING, effectivePositionGroup } from '@/lib/positionGroups';
@@ -211,12 +211,12 @@ export function PlayerCard({
       )}
 
       {/* Injury / healed badge */}
-      {injury?.cleared ? (
+      {isShownHealed(player, injury) ? (
         <div className="rounded-lg border border-green-500/20 bg-green-950/30 px-2 py-1 text-center">
           <p className="text-xs font-semibold text-green-400">✓ Healed</p>
           <p className="text-[10px] text-green-600">manually cleared</p>
         </div>
-      ) : injury ? (
+      ) : injury && !injury.cleared ? (
         <div className="rounded-lg border border-red-500/20 bg-red-950/40 px-2 py-1 text-center">
           <p className="text-xs font-semibold text-red-400">{injury.name ?? 'Injured'}</p>
           {returning ? (

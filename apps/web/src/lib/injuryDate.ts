@@ -1,4 +1,5 @@
 import type { PlayerInjuryInfo } from '@/lib/fotmob';
+import type { SquadPlayer } from '@/types/squad';
 
 /** True when the expected return date is today (player may be back — show "returning" hint). */
 export function isReturningToday(info: PlayerInjuryInfo): boolean {
@@ -28,4 +29,23 @@ export function isInjuryActive(info: PlayerInjuryInfo | null | undefined, now: D
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return true;
   return startOfDay(d) > startOfDay(now);
+}
+
+/**
+ * Should the player appear in the injury list / "Injured" count? Yes for an injury record that is not
+ * healed (FotMob flag or manual override) and for a manually set `lineupStatus: 'injured'`.
+ */
+export function isInjuryListed(
+  player: Pick<SquadPlayer, 'lineupStatus'>,
+  info: PlayerInjuryInfo | null | undefined,
+): boolean {
+  return player.lineupStatus === 'injured' || (info != null && !info.cleared);
+}
+
+/** "✓ Healed" badge: the user cleared the injury and the player is not manually marked injured again. */
+export function isShownHealed(
+  player: Pick<SquadPlayer, 'lineupStatus'>,
+  info: PlayerInjuryInfo | null | undefined,
+): boolean {
+  return !!info?.cleared && player.lineupStatus !== 'injured';
 }

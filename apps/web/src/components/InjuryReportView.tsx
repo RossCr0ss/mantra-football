@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import type { SquadPlayer } from '@/types/squad';
-import { isReturningToday } from '@/lib/injuryDate';
+import { isInjuryListed, isReturningToday } from '@/lib/injuryDate';
 import type { PlayerInjuryInfo } from '@/lib/fotmob';
 
 interface Props {
@@ -20,7 +20,7 @@ export default function InjuryReportView({ leagueId, initialPlayers, initialInju
   const [actionId, setActionId] = useState<number | null>(null);
 
   // ── Categories ───────────────────────────────────────────────────────────────
-  const injuredPlayers   = players.filter((p) => (injuries[p.id] != null && !injuries[p.id]!.cleared) || p.lineupStatus === 'injured');
+  const injuredPlayers   = players.filter((p) => isInjuryListed(p, injuries[p.id]));
   const suspendedPlayers = players.filter((p) => p.lineupStatus === 'suspended');
   const doubtfulPlayers  = players.filter(
     (p) =>
@@ -62,9 +62,14 @@ export default function InjuryReportView({ leagueId, initialPlayers, initialInju
       });
       const data = await res.json();
       setInjuries((prev) => ({ ...prev, [playerId]: data.injury }));
-      setPlayers((prev) =>
-        prev.map((p) => (p.id === playerId && p.lineupStatus === 'injured' ? { ...p, lineupStatus: undefined } : p)),
-      );
+      if (players.find((p) => p.id === playerId)?.lineupStatus === 'injured') {
+        setPlayers((prev) => prev.map((p) => (p.id === playerId ? { ...p, lineupStatus: undefined } : p)));
+        await fetch('/api/squad', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leagueId, playerId, lineupStatus: null, lineupStatusSource: 'manual' }),
+        });
+      }
     } finally {
       setActionId(null);
     }
@@ -140,7 +145,7 @@ export default function InjuryReportView({ leagueId, initialPlayers, initialInju
       {injuredPlayers.length > 0 && (
         <Section title="Injured" count={injuredPlayers.length} accent="border-red-500/20">
           {injuredPlayers.map((player) => {
-            const info = injuries[player.id];
+            const info = injuries[player.id]?.cleared ? undefined : injuries[player.id];
             const returning = info ? isReturningToday(info) : false;
             const isManual = !info && player.lineupStatus === 'injured';
 

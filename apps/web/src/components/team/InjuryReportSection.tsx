@@ -51,7 +51,8 @@ export function InjuryReportSection({
 
       <div className="divide-y divide-red-500/10 overflow-hidden rounded-2xl border border-red-500/15">
         {injuredPlayers.map((player) => {
-          const info = injuries[player.id];
+          const raw = injuries[player.id];
+          const info = raw?.cleared ? undefined : raw;
           const returning = info ? isReturningToday(info) : false;
           const isEditingThis = editingInjuryId === player.id;
 

@@ -6,6 +6,7 @@ import { notFound } from 'next/navigation';
 import { LEAGUES } from '@/lib/leagues';
 import type { PlayerInjuryInfo } from '@/lib/fotmob';
 import { getPlayerInjuriesBatch } from '@/lib/injuries';
+import { isInjuryListed } from '@/lib/injuryDate';
 import { getPlayerFormCached } from '@/lib/fotmobCache';
 import { suggestAvailabilityPct, summarizeRecentForm } from '@/lib/availabilitySuggestion';
 import { getSquadSeasonStats } from '@/lib/squadStats';
@@ -40,6 +41,8 @@ export default async function TeamPage({ params }: Props) {
   for (const [idStr, info] of Object.entries(injuryMap)) {
     if (info) injuries[Number(idStr)] = info;
   }
+
+  const injuredCount = players.filter((p) => isInjuryListed(p, injuries[p.id])).length;
 
   const formEntries = await Promise.all(
     players.map(async (p) => {
@@ -110,8 +113,8 @@ export default async function TeamPage({ params }: Props) {
               ))}
               <SummaryCell
                 label="Injured"
-                value={Object.keys(injuries).length}
-                accent={Object.keys(injuries).length > 0 ? 'text-red-400' : undefined}
+                value={injuredCount}
+                accent={injuredCount > 0 ? 'text-red-400' : undefined}
               />
             </div>
 
