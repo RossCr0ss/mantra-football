@@ -151,6 +151,8 @@ If `injuryInformation` is absent or null, the player is not injured. The functio
 
 Live injury data is read through `getPlayerInjury()` in `lib/injuries.ts`. If playerData fetches stop working, set `FOTMOB_COOKIE` env var with a valid browser cookie to bypass Turnstile.
 
+**`recentMatches` (player form):** ~40 matches, **newest first**, all competitions (league, cups, friendlies, national team) and *including matches the player sat out* (`onBench: true`, `minutesPlayed: 0`) — no gaps for a club's official matches. Per match: `teamId`, `leagueName`, `matchDate.utcTime`, `minutesPlayed`, `playedInMatch`, `onBench`, `ratingProps.rating` (`0` = unrated, string when rated), `goals`, `assists`, `yellowCards`, `redCards`. There is **no start flag**: a substitute who came on has `onBench: false` too, so `fetchPlayerRecentMatches` calls it a start only above 45 minutes. `lastClubMatches` takes the 5 **newest** official club matches of the season (sorted by date — never the tail of the list, which is the *oldest*; that bug made a player on the bench for a month look like an ever-present) and returns them oldest first.
+
 **Season stats structure** (from `firstSeasonStats.statsSection`):
 ```json
 {

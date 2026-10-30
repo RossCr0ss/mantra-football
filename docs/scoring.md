@@ -20,7 +20,7 @@ score = 15 × startProb × (expectedPoints − 5.0)      // floored at 0; 15 sco
 | `analytics` | `PlayerAnalytics` from `/api/leagues/[id]/analytics` | Season stats: rating, matches/minutes, goals, assists, xG, key passes, big chances created. Also carries `priorSeason` (previous completed season) for early-season blending |
 | `fix` | `TeamFixture` from `/api/leagues/[id]/fixtures` | Next fixture: `isHome`, `round`, `difficulty` 1–5 (fallback only) |
 | `odds` | `FixtureOdds` from `/api/matches/[id]/odds` | Decimal 1X2 odds: home/draw/away |
-| `form` | `PlayerRecentMatch[]` from `/api/leagues/[id]/form` | Only the per-match **ratings** are used (blend with the season rating when ≥3 rated matches). The form route is derived from team results, so ratings are `null` and this blend is inactive in practice |
+| `form` | `PlayerRecentMatch[]` from `/api/leagues/[id]/form` | Only the per-match **ratings** are used (blend with the season rating when ≥3 of the last 5 team matches were rated with >30 min — the window is the last 5 *matches*, not the last 5 he played; chronological, newest last). The form route is derived from team results, so ratings are `null` and this blend is inactive in practice |
 
 ### Analytics data source
 

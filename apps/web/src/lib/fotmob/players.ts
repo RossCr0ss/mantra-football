@@ -136,6 +136,9 @@ function currentSeasonStart(): Date {
   return new Date(year, 6, 1);
 }
 
+/** At most this many minutes ⇒ treated as a substitute appearance, not a start. */
+const MAX_SUB_CAMEO_MINUTES = 45;
+
 function parseMatchDate(m: Record<string, unknown>): Date {
   const md = m.matchDate as Record<string, unknown> | null;
   const raw = md?.utcTime ?? m.date ?? (m.status as Record<string, unknown> | null)?.utcTime ?? '';
@@ -155,7 +158,26 @@ function isFriendly(m: Record<string, unknown>): boolean {
 }
 
 /**
- * Last 5 appearances this season for the player's own club, in an official
+ * The 5 most recent official club matches of the current season, oldest first (newest rightmost in the UI).
+ * FotMob lists `recentMatches` **newest first** and includes matches the player sat out (unused sub, 0 min),
+ * so the window is the head of the date-sorted list — taking the tail would return the 5 *oldest* matches
+ * of the season (a player who has not played for a month would look like an ever-present). The sort makes
+ * the result independent of the order FotMob happens to return.
+ */
+export function lastClubMatches(
+  raw: Record<string, unknown>[],
+  clubTeamId: number,
+  seasonStart: Date,
+): Record<string, unknown>[] {
+  return raw
+    .filter((m) => parseMatchDate(m) >= seasonStart && !isFriendly(m) && Number(m.teamId ?? 0) === clubTeamId)
+    .sort((a, b) => parseMatchDate(b).getTime() - parseMatchDate(a).getTime())
+    .slice(0, 5)
+    .reverse();
+}
+
+/**
+ * Last 5 matches this season for the player's own club, in an official
  * club competition (domestic league, domestic cups, continental) — recentMatches
  * mixes in international caps, friendlies, and prior-season matches, none of
  * which belong in a "recent form" read: international duty and friendlies
@@ -182,9 +204,7 @@ export async function fetchPlayerRecentMatches(playerId: number): Promise<Player
     const myClubTeamId = Number((data?.primaryTeam as Record<string, unknown> | null)?.teamId ?? 0);
     const seasonStart = currentSeasonStart();
 
-    return raw
-      .filter((m) => parseMatchDate(m) >= seasonStart && !isFriendly(m) && Number(m.teamId ?? 0) === myClubTeamId)
-      .slice(-5)
+    return lastClubMatches(raw, myClubTeamId, seasonStart)
       .map((m): PlayerRecentMatch | null => {
         try {
           // Current FotMob shape: isHomeTeam, opponentTeamId/Name, matchDate.utcTime, ratingProps.rating
@@ -238,7 +258,11 @@ export async function fetchPlayerRecentMatches(playerId: number): Promise<Player
           // Cards: yellowCards/redCards (numbers) or yellowCard/redCard (booleans)
           const yellowCard = m.yellowCards != null ? Number(m.yellowCards) > 0 : Boolean(m.yellowCard);
           const redCard    = m.redCards    != null ? Number(m.redCards)    > 0 : Boolean(m.redCard);
-          const started = Boolean(m.playedInMatch) && !Boolean(m.onBench);
+          const minutesPlayed = m.minutesPlayed != null ? Number(m.minutesPlayed) : null;
+          // FotMob has no "started" flag: a substitute who came on has onBench=false as well. A short cameo
+          // (e.g. 6 min) is a sub, not a start — starters are rarely off before half-time.
+          const started = Boolean(m.playedInMatch) && !Boolean(m.onBench)
+            && (minutesPlayed === null || minutesPlayed > MAX_SUB_CAMEO_MINUTES);
 
           return {
             matchId: String(m.id ?? ''),
@@ -249,7 +273,7 @@ export async function fetchPlayerRecentMatches(playerId: number): Promise<Player
             result,
             goalsFor,
             goalsAgainst,
-            minutesPlayed: m.minutesPlayed != null ? Number(m.minutesPlayed) : null,
+            minutesPlayed,
             rating,
             goals: Number(m.goals ?? 0),
             assists: Number(m.assists ?? 0),

@@ -15,6 +15,16 @@ describe('recentFormRating', () => {
     expect(recentFormRating([makeForm({ rating: 6 }), makeForm({ rating: 7 }), makeForm({ rating: 8 })])).toBe(7);
     expect(recentFormRating([makeForm(), makeForm(), makeForm({ minutesPlayed: 10 })])).toBeNull();
   });
+
+  it('rates the last 5 team matches, not the last 5 he played (chronological form, newest last)', () => {
+    const played = [8, 8, 8].map((rating) => makeForm({ rating }));
+    const satOut = [1, 2, 3, 4].map(() => makeForm({ rating: null, minutesPlayed: 0, started: false }));
+    // 3 old good matches, then 4 matches on the bench: only 1 of the last 5 is rated → no form
+    expect(recentFormRating([...played, ...satOut])).toBeNull();
+    // old matches outside the window of 5 are ignored
+    const old = [3, 3, 3].map((rating) => makeForm({ rating }));
+    expect(recentFormRating([...old, ...played, ...played.slice(0, 2)])).toBe(8);
+  });
 });
 
 describe('calcScore', () => {

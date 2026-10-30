@@ -126,7 +126,7 @@ export interface PlayerRecentMatch {
   yellowCard: boolean;
   redCard: boolean;
   leagueId: number;
-  /** true if in the starting XI (playedInMatch && !onBench) — false for subs, unused subs, and DNPs. */
+  /** true if in the starting XI (played, not on the bench, > 45 min — FotMob has no start flag, short cameos are subs) — false for subs, unused subs, and DNPs. */
   started: boolean;
 }
 

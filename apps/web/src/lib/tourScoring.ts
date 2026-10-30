@@ -95,11 +95,15 @@ export interface ScoreBreakdown {
   availability: number;
 }
 
-/** Average rating from the last ≥3 recent matches that had playing time. */
+/**
+ * Average rating over the last 5 matches (`form` is chronological, newest last), counting only those with
+ * playing time; null when fewer than 3 of them were rated. The window is the last 5 *team* matches, not the last
+ * 5 matches he played — a player who has been out for a month must not be rated on matches from two months ago.
+ */
 export function recentFormRating(form: PlayerRecentMatch[]): number | null {
   const rated = form
+    .slice(-5)
     .filter((m) => m.rating !== null && m.minutesPlayed !== null && m.minutesPlayed > 30)
-    .slice(0, 5)
     .map((m) => m.rating as number);
   if (rated.length < 3) return null;
   return rated.reduce((s, r) => s + r, 0) / rated.length;
